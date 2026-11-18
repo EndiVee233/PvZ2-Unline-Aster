@@ -1,0 +1,265 @@
+{
+  "format": "pvz2-offline-pvp",
+  "version": 2,
+  "名字": "妙趣横生的刘琨",
+  "奖杯": 160,
+  "特殊值": true,
+  "出现概率": 0.75,
+  "columns": 9,
+  "rows": 5,
+  "tierMask": 14,
+  "阵容": [
+    {
+      "type": "agave",
+      "row": 3,
+      "column": 0,
+      "level": 4
+    },
+    {
+      "type": "cottonyeti",
+      "row": 4,
+      "column": 0,
+      "level": 4
+    },
+    {
+      "type": "agave",
+      "row": 0,
+      "column": 0,
+      "level": 4
+    },
+    {
+      "type": "cottonyeti",
+      "row": 1,
+      "column": 0,
+      "level": 4
+    },
+    {
+      "type": "redstinger",
+      "row": 2,
+      "column": 0,
+      "level": 4
+    },
+    {
+      "type": "akee",
+      "row": 3,
+      "column": 1,
+      "level": 4
+    },
+    {
+      "type": "chardguard",
+      "row": 4,
+      "column": 1,
+      "level": 4
+    },
+    {
+      "type": "stallia",
+      "row": 0,
+      "column": 1,
+      "level": 3
+    },
+    {
+      "type": "wintersweet",
+      "row": 1,
+      "column": 1,
+      "level": 4
+    },
+    {
+      "type": "wintersweet",
+      "row": 2,
+      "column": 1,
+      "level": 4
+    },
+    {
+      "type": "agave",
+      "row": 3,
+      "column": 2,
+      "level": 4
+    },
+    {
+      "type": "chestnut",
+      "row": 4,
+      "column": 2,
+      "level": 4
+    },
+    {
+      "type": "agave",
+      "row": 0,
+      "column": 2,
+      "level": 4
+    },
+    {
+      "type": "kiwifruit",
+      "row": 1,
+      "column": 2,
+      "level": 4
+    },
+    {
+      "type": "kiwifruit",
+      "row": 2,
+      "column": 2,
+      "level": 4
+    },
+    {
+      "type": "stallia",
+      "row": 3,
+      "column": 3,
+      "level": 3
+    },
+    {
+      "type": "redstinger",
+      "row": 4,
+      "column": 3,
+      "level": 4
+    },
+    {
+      "type": "agave",
+      "row": 0,
+      "column": 3,
+      "level": 4
+    },
+    {
+      "type": "dragonfruit",
+      "row": 1,
+      "column": 3,
+      "level": 3
+    },
+    {
+      "type": "wintermelon",
+      "row": 2,
+      "column": 3,
+      "level": 4
+    },
+    {
+      "type": "stallia",
+      "row": 3,
+      "column": 4,
+      "level": 3
+    },
+    {
+      "type": "dragonfruit",
+      "row": 4,
+      "column": 4,
+      "level": 3
+    },
+    {
+      "type": "agave",
+      "row": 0,
+      "column": 4,
+      "level": 4
+    },
+    {
+      "type": "agave",
+      "row": 1,
+      "column": 4,
+      "level": 4
+    },
+    {
+      "type": "kiwifruit",
+      "row": 2,
+      "column": 4,
+      "level": 4
+    },
+    {
+      "type": "stallia",
+      "row": 3,
+      "column": 5,
+      "level": 3
+    },
+    {
+      "type": "wintersweet",
+      "row": 4,
+      "column": 5,
+      "level": 4
+    },
+    {
+      "type": "jackfruit",
+      "row": 0,
+      "column": 5,
+      "level": 3
+    },
+    {
+      "type": "puffshroom",
+      "row": 1,
+      "column": 5,
+      "level": 4
+    },
+    {
+      "type": "puffshroom",
+      "row": 2,
+      "column": 5,
+      "level": 4
+    },
+    {
+      "type": "stallia",
+      "row": 3,
+      "column": 6,
+      "level": 3
+    },
+    {
+      "type": "puffshroom",
+      "row": 4,
+      "column": 6,
+      "level": 4
+    },
+    {
+      "type": "puffshroom",
+      "row": 0,
+      "column": 6,
+      "level": 4
+    },
+    {
+      "type": "puffshroom",
+      "row": 1,
+      "column": 6,
+      "level": 4
+    },
+    {
+      "type": "stallia",
+      "row": 2,
+      "column": 6,
+      "level": 3
+    },
+    {
+      "type": "stallia",
+      "row": 3,
+      "column": 7,
+      "level": 3
+    },
+    {
+      "type": "iceburg",
+      "row": 4,
+      "column": 7,
+      "level": 2
+    },
+    {
+      "type": "puffshroom",
+      "row": 0,
+      "column": 7,
+      "level": 4
+    },
+    {
+      "type": "stallia",
+      "row": 1,
+      "column": 7,
+      "level": 3
+    },
+    {
+      "type": "puffshroom",
+      "row": 2,
+      "column": 7,
+      "level": 4
+    },
+    {
+      "type": "puffshroom",
+      "row": 3,
+      "column": 8,
+      "level": 4
+    },
+    {
+      "type": "stallia",
+      "row": 4,
+      "column": 8,
+      "level": 3
+    }
+  ]
+}

@@ -23,7 +23,7 @@ static void residentialNeighbor(U b,P m,const NpcPreset&n){
 #endif
  // +10 cups shown on the map; +14 cups obtainable; +18 obtainable coins.
  // Ranking was removed and medal/gem/cup rewards were not authorized.
- alignas(8) U record[16]={n.id,0,0,n.level,0,0,100,n.zone,n.position,1,0,0,0,0,1,0};
+ alignas(8) U record[16]={n.id,0,0,n.level,0,0,THREE_STAR_RAID_COINS,n.zone,n.position,1,0,0,0,0,NEIGHBOR_ATTACK_FEE,0};
  char allocator=0;
  call<void>(b,0x14eb451,reinterpret_cast<P>(record)+8,n.name,&allocator);
  call<void>(b,0x104678c,m,record);

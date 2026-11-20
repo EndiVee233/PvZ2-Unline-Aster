@@ -24,7 +24,7 @@ static I readGarrison(U b,U target,Store&formation){
  while(done<sizeof(saved)){I n=call<I>(b,0x148460,fd,reinterpret_cast<P>(&saved)+done,sizeof(saved)-done);if(n<=0)break;done+=U(n);}
  char tail;I extra=call<I>(b,0x148460,fd,&tail,1);call<I>(b,0x147b90,fd);
  if(done!=sizeof(saved)||extra!=0||!validGarrison(saved,owner(b),target))return -1;
- formation=saved.formation;return 1;
+ formation=saved.formation;removeDisabledDefenders(formation);return 1;
 }
 static bool writeGarrison(U b,U target,const Store&formation){
  GarrisonStore saved{};saved.magic=0x47445650;saved.version=1;saved.user=owner(b);saved.target=target;

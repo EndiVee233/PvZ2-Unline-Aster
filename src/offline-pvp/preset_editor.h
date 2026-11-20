@@ -12,6 +12,10 @@ static EditorSession* editorSession;
 static P editorSettings;
 static U editorEvent,editorOutputSize,editorOutput[184];
 #ifdef PVP_PRESET_NATIVE_PAGES
+#if __has_include("all_one_template.h")
+#define ASTER_TEST_PROFILE_PAGE
+#include "test_profile.h"
+#endif
 static U editorPage;
 static bool editorNetworkEnabled;
 static const U editorTitles[3][20]={
@@ -22,6 +26,9 @@ static const U editorTitles[3][20]={
 extern "C" void offlinePresetPageTitle(U b,P holder,P token){
  if(!editorPage){call<void>(b,0x8e4560,holder,token);return;}
  P title=nullptr;char allocator=0;
+#ifdef ASTER_TEST_PROFILE_PAGE
+ if(editorPage==5)call<void>(b,0x14eb451,&title,testPageTitle(),&allocator);else
+#endif
  call<void>(b,0x14eb451,&title,editorTitles[editorPage==4?2:editorPage-1],&allocator);
  call<void>(b,0x14e9b0d,holder+0xa0,&title);
  release(b,title,true);
@@ -31,6 +38,18 @@ extern "C" U offlinePresetPageRows(U b,P scroll,P description){
  if(!editorPage||!editorSettings)return 0;
  // The template created the original explanatory label, but has not attached it.
  call<void>(b,at<U>(at<P>(description,0),4)-b,description);
+#ifdef ASTER_TEST_PROFILE_PAGE
+ if(editorPage==5){
+  bool enabled=managedSlot(testStore(b))!=nullptr;
+  for(U i=0;i<2;++i){
+   P title=nullptr;char allocator=0;
+   call<void>(b,0x14eb451,&title,i?U"关闭":U"开启",&allocator);
+   P row=call<P>(b,0x8e4edc,editorSettings,1051+i,&title,U(enabled==(i==0)));
+   call<void>(b,0x8e5924,scroll,row);release(b,title,true);
+  }
+  return 1;
+ }
+#endif
  static const U toggles[2][12]={{0x5f00,0x542f,0x8054,0x7f51,0x83b7,0x53d6},{0x5173,0x95ed,0x8054,0x7f51,0x83b7,0x53d6}};
  static const U tiers[4][3]={{0x4e00,0x9636},{0x4e8c,0x9636},{0x4e09,0x9636},{0x56db,0x9636}};
  static const U details[]={0x5173,0x5361,0x8d44,0x6599,0};
@@ -120,10 +139,26 @@ extern "C" void offlinePresetSettingsReady(U b,P ui){
   P row=call<P>(b,0x8e4898,ui,1001+i,&title,arrow);
   call<void>(b,0x8e5924,scroll,row);release(b,title,true);
  }
+#ifdef ASTER_TEST_PROFILE_PAGE
+ P label=nullptr;char allocator=0;
+ call<void>(b,0x14eb451,&label,U"测试存档",&allocator);
+ P row=call<P>(b,0x8e4898,ui,1006U,&label,arrow);
+ call<void>(b,0x8e5924,scroll,row);release(b,label,true);
+#endif
 }
 extern "C" U offlinePresetSettingsClick(U b,P ui,U id){
 #ifdef PVP_PRESET_NATIVE_PAGES
  if(id<=1){if(editorSettings==ui){editorSettings=nullptr;editorPage=0;}return 0;}
+#ifdef ASTER_TEST_PROFILE_PAGE
+ if(id==1006){
+  if(presetEditing||at<P>(ui,0xc0)||at<U>(ui,0xd4))return 1;
+  editorSettings=ui;editorPage=5;profileError=ProfileError::none;return 2;
+ }
+ if(ui==editorSettings&&editorPage==5&&(id==1051||id==1052)){
+  profileError=setTestProfile(b,id==1051);
+  call<void>(b,0x8e7820,ui);return 1;
+ }
+#endif
  if(id==1004){if(!presetEditing)editorEvent=19;return 1;}
  if(id>=1001&&id<=1003){
   if(presetEditing||at<P>(ui,0xc0)||at<U>(ui,0xd4))return 1;
@@ -185,6 +220,11 @@ static void editorRefreshBank(U b,P module){
  }
 }
 extern "C" void offlinePresetBankReady(U b,P module){
+ P holder=at<P>(reinterpret_cast<P>(b),0x1821674);
+ P app=holder?at<P>(holder,0):nullptr;
+ P board=app?at<P>(app,0x6bc):nullptr;
+ if(module&&plantBankEditorBoard(board))
+  centerPlantBank(b,app,resolvePlantBank(b,module));
  if(!presetEditing)return;
  editorRefreshBank(b,module);
  log(b,"preset-bank-ready");

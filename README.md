@@ -1,5 +1,9 @@
 # PvZ2-Unline:Aster
 
+## 正式版下载
+
+优先选择 ARM32。需要 ARM64 的设备请下载对应安装包。 [下载最新正式版](https://github.com/EndiVee233/PvZ2-Unline-Aster/releases/latest) · [A197 构建与验证](docs/recovery/aster-A197-release.md)
+
 ## Unline系列
 - PvZ2:Aster
 - [PvZ2:Iris](https://github.com/EndiVee233/PvZ2-Unline-Iris)

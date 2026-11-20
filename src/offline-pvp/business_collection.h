@@ -14,3 +14,13 @@ static bool collectBusiness(U b,const BusinessPlot& plot){
  if(!commitProgression(b,m,next))return false;
  log(b,"business-rent-collected",coins,medals);return true;
 }
+
+// Entered only after the original map's owned-chest rectangle hit test.
+extern "C" U offlineBusinessChest(U b,P map,P record){
+ if(!record||!map||!regular(b))return 0;
+ const BusinessPlot* plot=businessId(at<U>(record,0));
+ if(!plot||at<U>(record,48)!=plot->zone||at<U>(record,52)!=plot->position)return 0;
+ if(at<U64>(record,8)!=offlineBusinessIdentity(b))return 0;
+ collectBusiness(b,*plot);
+ return 1;
+}

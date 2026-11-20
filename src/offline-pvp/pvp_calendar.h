@@ -14,7 +14,6 @@ static U lastDaveRefreshDay(U day){
 static void prepareNeighborAttackDay(U b,Economy&s){
  U day;if(pvpCivilDay(b,day)&&day>s.neighborAttackDay){s.neighborAttackDay=day;s.neighborAttacks=0;}
 }
-static U neighborAttackFee(U attacks){return attacks<5?10:attacks<10?20:attacks<15?50:100;}
 static bool isNeighborAttack(U id){const NpcPreset*n=npc(id);return n&&!n->evil;}
 static void countNeighborAttack(U b,Economy&s){
  if(!isNeighborAttack(s.battleNpc))return;

@@ -2,6 +2,9 @@
 using U=unsigned;using P=unsigned char*;using I=int;using U64=unsigned long long;
 template<class T>T& at(P p,U o){return *reinterpret_cast<T*>(p+o);}
 template<class R,class...A>R call(U b,U o,A...a){return reinterpret_cast<R(*)(A...)>(b+o)(a...);}
+static constexpr U NEIGHBOR_ATTACK_FEE=10;
+static constexpr U DAVE_ATTACK_FEE=30;
+static constexpr U THREE_STAR_RAID_COINS=300;
 #ifdef BOARD_CAMERA_BOUNDS
 #include "board_camera.h"
 #endif
@@ -325,7 +328,7 @@ static void neighbors(U b,P m){
    // +8 and its plot at +1c/+20, unlike player-neighbor records.
    // +30 is dfmt, the challenge total compared with manager+15c by the
    // original map click handler. Zero makes even an untouched house "beaten".
-   alignas(8) U special[16]={n.id,0,0,n.level,1000,2000,100,n.zone,n.position,4,0,0,n.level,0,1,0};
+   alignas(8) U special[16]={n.id,0,0,n.level,1000,2000,100,n.zone,n.position,4,0,0,n.level,0,DAVE_ATTACK_FEE,0};
 #ifdef PVP_DAVE_ROUNDS
    special[11]=economyRuntime.state.daveWins;
    special[12]=DAVE_ROUND_COUNT;
@@ -333,7 +336,6 @@ static void neighbors(U b,P m){
 #ifdef PVP_WEEKLY_RULES
    const NpcPreset*victim=npc(economyRuntime.state.daveTarget);if(!victim)continue;
    special[7]=victim->zone;special[8]=victim->position;
-   if(special[11]>=DAVE_ROUND_COUNT)special[11]=DAVE_ROUND_COUNT-1;
 #endif
    char alloc=0;call<void>(b,0x14eb451,reinterpret_cast<P>(special)+8,n.name,&alloc);
    call<void>(b,0x104678c,m,special);release(b,reinterpret_cast<P>(special[2]),true);
@@ -373,6 +375,17 @@ static bool valid(const Store&s,U id){
  for(U i=0;i<s.infos;++i)if(s.info[i].length>=128||s.info[i].signature[s.info[i].length]||s.info[i].type>4096||s.info[i].level>20)return false;
  return true;
 }
+static bool disabledDefender(U type){
+ return type==26||type==41||type==58||type==90||type==93; // magnifyinggrass, powerplant, streetlamp, groundcherry, goldleaf
+}
+static void removeDisabledDefenders(Store&s){
+ U count=0;
+ for(U i=0;i<s.positions;++i)if(!disabledDefender(s.pos[i].type))s.pos[count++]=s.pos[i];
+ s.positions=count;count=0;
+ for(U i=0;i<s.infos;++i)if(!disabledDefender(s.info[i].type))s.info[count++]=s.info[i];
+ s.infos=count;
+ s.hash=hash(s);
+}
 static void path(U id,char*out,bool temp=false){
 #ifdef PVP_WEEKLY_RULES
  const char*prefix="/data/data/com.pvz2unline.aster/files/userdata/offline-pvp-";
@@ -393,7 +406,7 @@ static bool capture(U b,P data,Store& s){
   s.info[k].type=at<U>(r,0);s.info[k].level=at<U>(r,4);s.info[k].avatar=at<U>(r,8);s.info[k].length=len;
   bytes(reinterpret_cast<P>(s.info[k].signature),text,len);s.info[k].signature[len]=0;
  }
- s.hash=hash(s);return valid(s,s.user);
+ removeDisabledDefenders(s);return valid(s,s.user);
 }
 static bool writeStore(U b,Store&s){
  char tmp[160],dst[160];path(s.user,tmp,true);path(s.user,dst);
@@ -408,7 +421,8 @@ static bool readStore(U b,Store&s){
  char file[160];path(owner(b),file);I fd=call<I>(b,0x148448,file,0,0);if(fd<0)return false;
  U done=0;while(done<sizeof(s)){I n=call<I>(b,0x148460,fd,reinterpret_cast<P>(&s)+done,sizeof(s)-done);if(n<=0)break;done+=U(n);}
  char tail;I extra=call<I>(b,0x148460,fd,&tail,1);call<I>(b,0x147b90,fd);
- return done==sizeof(s)&&extra==0&&valid(s,owner(b));
+ if(done!=sizeof(s)||extra!=0||!valid(s,owner(b)))return false;
+ removeDisabledDefenders(s);return true;
 }
 #ifdef PVP_BUSINESS_DEFENSE
 #include "garrison_storage.h"
@@ -447,7 +461,7 @@ static bool localDaveAllowed(U b,P m,const NpcPreset&n){
 #ifdef PVP_WEEKLY_RULES
   // The map refreshes the schedule. Keep an already opened preview/battle
   // bound to that visitor if midnight passes while the board is active.
-  if(!economyRuntime.state.daveActive){economyNotice(b,"[V169_DAVE_WAIT]");return false;}
+  if(!economyRuntime.state.daveActive||economyRuntime.state.daveWins>=DAVE_ROUND_COUNT){economyNotice(b,"[V169_DAVE_WAIT]");return false;}
 #else
   if(economyRuntime.state.daveWins>=DAVE_ROUND_COUNT){economyNotice(b,"[V66_DAVE_FINISHED]");return false;}
 #endif
@@ -460,14 +474,20 @@ static bool localDaveAllowed(U b,P m,const NpcPreset&n){
 // The record can outlive a completed battle or be rebuilt by the old map
 // notifications. Project the accepted local values at the actual title call.
 extern "C" void offlineDaveLabel(U b,P record){
- if(!record||!regular(b))return;const NpcPreset*n=npc(at<U>(record,0));
- if(!n||!n->evil||at<U>(record,0x24)!=4)return;
+ if(!record||at<U>(record,0x24)!=4||!profile(b))return;
+ const NpcPreset*n=npc(at<U>(record,0));
+ if(!regular(b)){
+  const auto& runtime=economyRuntime;
+  U wins=runtime.loaded&&!runtime.blocked&&runtime.user==owner(b)?runtime.state.daveWins:0;
+  at<U>(record,0x2c)=wins;at<U>(record,0x30)=DAVE_ROUND_COUNT;
+  return;
+ }
+ if(!n||!n->evil)return;
  if(!ensureEconomy(b,manager(b)))return;
  U wins=economyRuntime.state.daveWins;
 #ifdef PVP_WEEKLY_RULES
  const NpcPreset*victim=npc(economyRuntime.state.daveTarget);
  if(!economyRuntime.state.daveActive||!victim||at<U>(record,0x1c)!=victim->zone||at<U>(record,0x20)!=victim->position)return;
- if(wins>=DAVE_ROUND_COUNT)wins=DAVE_ROUND_COUNT-1;
 #else
  if(at<U>(record,0x1c)!=n->zone||at<U>(record,0x20)!=n->position)return;
 #endif
@@ -480,7 +500,7 @@ extern "C" void offlineDaveLabel(U b,P record){
 static bool preset(U b,P m,const NpcPreset&n){
  const U (*plants)[3]=n.plants;U count=n.count;
 #ifdef PVP_DAVE_ROUNDS
- if(n.evil){arenaDaveRound=economyRuntime.state.daveWins;if(arenaDaveRound>=DAVE_ROUND_COUNT)arenaDaveRound=DAVE_ROUND_COUNT-1;const DaveRound&r=DAVE_ROUNDS[arenaDaveRound];plants=r.plants;count=r.count;log(b,"dave-round-prepared",arenaDaveRound+1,count);}
+ if(n.evil){arenaDaveRound=economyRuntime.state.daveWins;if(arenaDaveRound>=DAVE_ROUND_COUNT)return false;const DaveRound&r=DAVE_ROUNDS[arenaDaveRound];plants=r.plants;count=r.count;log(b,"dave-round-prepared",arenaDaveRound+1,count);}
 #endif
  Store s{};s.user=owner(b);s.positions=count;
 #ifdef PVP_RANDOM_NEIGHBORS
@@ -520,7 +540,7 @@ static bool preset(U b,P m,const NpcPreset&n){
 #endif
   }
  }
- apply(b,m+0x80,s);return true;
+ removeDisabledDefenders(s);apply(b,m+0x80,s);return true;
 }
 static U arenaNpc,arenaUser;
 static bool resultAck,exitAck;
@@ -591,6 +611,19 @@ static void finishArenaBoard(U b){
 static bool sameText(P text,const char* expected){
  if(!text)return false;U i=0;while(expected[i]){if(text[i]!=U(expected[i]))return false;++i;}return text[i]==0;
 }
+extern "C" bool offlineTutorialSkillAllowed(U b,P card){
+ P holder=at<P>(reinterpret_cast<P>(b),0x1821674);
+ P app=holder?at<P>(holder,0):nullptr;
+ P board=app?at<P>(app,0x6bc):nullptr;
+ if(!board||!sameText(at<P>(board,0xc4),"arena_battle_attack_tutorial"))return true;
+ if(!card)return false;
+ P modules=at<P>(board,0x938);
+ P bank=modules?call<P>(b,0x43af38,modules,call<P>(b,0x10290ac)):nullptr;
+ // PVPSeedBankModule owns the weak handle used by the native energy setter.
+ P energy=bank?call<P>(b,0x1da034,call<P>(b,0x11d74b4),bank+0x58):nullptr;
+ I cost=at<I>(card,0x154);
+ return energy&&cost>=0&&at<I>(energy,0xf0)>=cost;
+}
 #ifdef ADVENTURE_TUTORIAL_SEEDS
 static U adventureTutorialDay(P board){
  static constexpr char levels[][10]={"tutorial1","tutorial2","tutorial3","tutorial4"};
@@ -659,6 +692,30 @@ extern "C" P adventureTutorialHintBank(U b,P board,U phase){
 }
 #endif
 static U requestedArenaView;
+#if defined(PVP_DAVE_REFERENCE) && defined(PVP_NEIGHBOR_PROTECTION)
+extern "C" bool offlineScoutRewards(U b,P widget,P m){
+ // Clear the unused padding byte even when the native constructor continues.
+ at<unsigned char>(widget,0xef)=0;
+ const NpcPreset*n=npc(arenaNpc);
+ if(!n||requestedArenaView!=1||at<unsigned char>(m,0x100)!=1||arenaUser!=owner(b)||!regular(b))return false;
+ if(n->evil&&arenaDaveRound>=DAVE_ROUND_COUNT)return false;
+ // Use the native reward layout for residential scouts. Only shops retain
+ // the production display. The first reward is a trophy for neighbors.
+ at<U>(widget,0x118)=1;
+ at<unsigned char>(widget,0xee)=1;
+ at<unsigned char>(widget,0xef)=!n->evil;
+ at<U>(widget,0xf0)=n->evil?DAVE_ROUNDS[arenaDaveRound].medals:starCups(3);
+ at<U>(widget,0xfc)=n->evil?0:THREE_STAR_RAID_COINS;
+ if(!n->evil){
+  static constexpr char32_t title[]=U"3星可获得奖励";
+  P heading=nullptr;char allocator=0;
+  call<void>(b,0x14eb451,&heading,title,&allocator);
+  call<void>(b,0x14e9b0d,widget+0x110,&heading);
+  release(b,heading,true);
+ }
+ return true;
+}
+#endif
 #ifdef PVP_GITHUB_PRESETS
 extern "C" void offlineSharedSpawnBegin(U,P board,U col,U row){
  sharedSpawnGrade=0;
@@ -795,6 +852,7 @@ static U defenseSessionUser;
 #ifdef SPEED_FEEDBACK
 #include "speed_feedback.h"
 #endif
+#include "plant_bank_layout.h"
 #include "preset_editor.h"
 #endif
 #ifdef PVP_TUTORIAL_DEFENSE
@@ -1024,18 +1082,19 @@ static bool persistBattleArmy(U b,P m,bool daveVictory=false,U stars=0){
  }
  if(daveVictory){
 #ifdef PVP_DAVE_ROUNDS
-  U expectedRound=next.daveWins<DAVE_ROUND_COUNT?next.daveWins:DAVE_ROUND_COUNT-1;
-  if(arenaDaveRound>=DAVE_ROUND_COUNT||expectedRound!=arenaDaveRound){log(b,"dave-result-stale",arenaDaveRound,next.daveWins);return false;}
+  if(arenaDaveRound>=DAVE_ROUND_COUNT||next.daveWins!=arenaDaveRound){log(b,"dave-result-stale",arenaDaveRound,next.daveWins);return false;}
 #ifdef PVP_WEEKLY_RULES
   if(!next.daveActive)return false;
-  next.daveActive=0;next.daveReplacement=1;
 #endif
 #ifdef PVP_DAVE_REFERENCE
   U reward=DAVE_ROUNDS[arenaDaveRound].medals;
   if(next.medals>2000000000u-reward)return false;
   next.medals+=reward;
 #endif
-  if(next.daveWins<DAVE_ROUND_COUNT)++next.daveWins;
+  ++next.daveWins;
+#ifdef PVP_WEEKLY_RULES
+  if(next.daveWins==DAVE_ROUND_COUNT){next.daveActive=0;next.daveReplacement=1;}
+#endif
 #else
   next.daveWins=1;
 #endif
@@ -1061,8 +1120,17 @@ static bool persistBattleArmy(U b,P m,bool daveVictory=false,U stars=0){
 #endif
 #ifdef PVP_HISTORY
  U beforeReward=next.coins;
+#ifdef PVP_NEIGHBOR_PROTECTION
+ U beforeCups=next.cups;
+#endif
 #endif
  if(rewarded&&!settleBattleReward(b,next,stars))return false;
+#ifdef PVP_WEEKLY_RULES
+ if(n&&n->evil){
+  if(!paidBattleMatches(b,next))return false;
+  closeBattleJournal(next);
+ }
+#endif
 #ifdef PVP_NEIGHBOR_PROTECTION
  if(n&&!n->evil&&stars){
   U cups=starCups(stars);
@@ -1072,6 +1140,9 @@ static bool persistBattleArmy(U b,P m,bool daveVictory=false,U stars=0){
 #endif
 #ifdef PVP_HISTORY
  appendHistory(b,next,arenaNpc,stars,next.coins-beforeReward);
+#ifdef PVP_NEIGHBOR_PROTECTION
+ recordHistoryCups(next,next.cups-beforeCups);
+#endif
 #ifdef PVP_DAVE_REFERENCE
  if(daveVictory)next.historyMedals[0]=DAVE_ROUNDS[arenaDaveRound].medals;
 #endif
@@ -1113,6 +1184,9 @@ extern "C" U offlineBattleResult(U b,P m,U stars,U id,U kind){
  shop=businessId(arenaNpc)!=nullptr;
 #endif
  if((!n&&!shop)||stars>3||((shop||n&&!n->evil)&&(id!=arenaNpc||kind!=2||!ensureEconomy(b,m)||!paidBattleMatches(b,economyRuntime.state)))){log(b,"battle-result-unpaid-or-stale",stars,id);return 1;}
+#ifdef PVP_WEEKLY_RULES
+ if(n&&n->evil&&(!ensureEconomy(b,m)||!paidBattleMatches(b,economyRuntime.state))){log(b,"dave-result-unpaid",stars,id);return 1;}
+#endif
  U previousCoins=economyRuntime.state.coins;
 #ifdef PVP_NEIGHBOR_PROTECTION
  U previousCups=economyRuntime.state.cups;
@@ -1185,6 +1259,19 @@ extern "C" void __aeabi_memclr8(void* p,U n){__aeabi_memclr4(p,n);}
 extern "C" void __aeabi_memclr(void* p,U n){__aeabi_memclr4(p,n);}
 extern "C" void __aeabi_memcpy8(void* dst,const void* src,U n){volatile unsigned char*d=static_cast<volatile unsigned char*>(dst);const volatile unsigned char*s=static_cast<const volatile unsigned char*>(src);while(n--)*d++=*s++;}
 extern "C" void __aeabi_memcpy4(void* dst,const void* src,U n){__aeabi_memcpy8(dst,src,n);}
+
+// At both raw file-reader sites the temporary new[] buffer uses the same
+// allocation and release functions as SexyBuffer's byte vector.
+extern "C" bool offlineAdoptLargeFile(U b,P buffer,P source,U size){
+ if(!source||size<16*1024*1024||size>0x1fffffff)return false;
+ P start=at<P>(buffer,4),end=at<P>(buffer,8),capacity=at<P>(buffer,12);
+ U beginAddress=reinterpret_cast<U>(start),capacityAddress=reinterpret_cast<U>(capacity);
+ if(end!=start||capacityAddress<beginAddress||capacityAddress-beginAddress>=size)return false;
+ if(start)call<void>(b,0x14c2e95,start);
+ at<P>(buffer,4)=source;at<P>(buffer,8)=at<P>(buffer,12)=source+size;
+ at<U>(buffer,0x10)=at<U>(buffer,0x18)=size*8;
+ return true;
+}
 
 // Record the actual level passed to Board::Load, beyond the request boundary.
 extern "C" void offlineBoardLoad(U b,P board,P name,U seed){

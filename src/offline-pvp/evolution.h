@@ -13,13 +13,7 @@ static bool ensureEvolution(U b,P m){
  if(!regular(b)||!ensureEconomy(b,m))return false;
  if(economyRuntime.state.evolutionInitialized)return true;
  Economy next=economyRuntime.state;next.evolutionInitialized=1;
- for(U i=0;i<TRAIN_COUNT;++i){
-  P key=nullptr;narrow(b,reinterpret_cast<P>(&key),TRAIN_SPECS[i].name);P record=call<P>(b,0x104673c,m,&key);release(b,key);
-  U level=record?at<U>(record,4):1;
-  // Import legitimate existing grades only. A missing or invalid server grade
-  // is not evidence that the zombie has completed every evolution.
-  next.evolutionLevels[i]=level>=1&&level<=4?level:1;
- }
+ for(auto& level:next.evolutionLevels)level=1;
  ++next.sequence;if(!saveEconomy(b,next)){economyNotice(b,"[V38_PVP_SAVE_ERROR]");return false;}
  economyRuntime.state=next;applyEvolution(b,m);log(b,"evolution-initialized");return true;
 }
@@ -35,12 +29,7 @@ static void applyEvolution(U b,P m){
   }
   release(b,key);
  }
- if(s.evolutionIndex){
-  P key=nullptr;narrow(b,reinterpret_cast<P>(&key),TRAIN_SPECS[s.evolutionIndex-1].name);
-  U type[2]{};call<void>(b,0xfb6ef0,type,&key);release(b,key);
-  at<U>(m,0x6c)=4;at<U>(m,0x70)=type[1];
-  U now=realNow(b);at<float>(m,0x74)=at<float>(call<P>(b,0x1f7380),0x24)+float(s.evolutionDue>now?s.evolutionDue-now:0);
- }
+
 }
 static void settleEvolution(U b,P m){
  if(!regular(b)||!economyRuntime.loaded||economyRuntime.user!=owner(b)||economyRuntime.blocked)return;
@@ -67,11 +56,7 @@ extern "C" void offlineEvolutionBuild(U b,P ui){
 extern "C" void offlineEvolutionTick(U b,P ui){
  if(!regular(b))return;U index=evolutionIndex(ui+0xa8);if(index==TRAIN_COUNT||!ensureEvolution(b,manager(b)))return;
  settleEvolution(b,manager(b));const Economy&s=economyRuntime.state;
- U mode=s.evolutionIndex==index+1?1:s.evolutionIndex||s.upgradeKind
-#ifdef PVP_SKILL_RESEARCH
- ||s.researchIndex
-#endif
- ?2:0,level=s.evolutionLevels[index];
+ U mode=s.evolutionIndex==index+1?1:s.evolutionIndex?2:0,level=s.evolutionLevels[index];
  bool rebuild=evolutionView.ui==ui&&evolutionView.index==index&&evolutionView.level!=level;
  evolutionView.index=index;evolutionView.level=level;evolutionView.mode=mode;
  if(rebuild){evolutionView.ui=nullptr;call<void>(b,0x107eb28,ui);}
@@ -95,11 +80,7 @@ extern "C" U offlineEvolutionClick(U b,P ui,U button){
   U callback[6]={0,b+0x1080e28,0,0,1,0};evolutionFinishPrompt=true;offlineTrainingFinishPrompt(b,timer,reinterpret_cast<P>(callback));evolutionFinishPrompt=false;
   log(b,"evolution-gem-prompt",index,evolutionPrice(b,minutes));return 1;
  }
- if(next.evolutionIndex||next.upgradeKind
-#ifdef PVP_SKILL_RESEARCH
- ||next.researchIndex
-#endif
- ){economyNotice(b,"[V54_UPGRADE_BUSY]");return 1;}
+ if(next.evolutionIndex){economyNotice(b,"[V54_UPGRADE_BUSY]");return 1;}
  if(TRAIN_SPECS[index].level>next.home){economyNotice(b,"[V38_PVP_LOCKED]");return 1;}
  U level=next.evolutionLevels[index];if(level>=4)return 1;
  U cost=EVOLUTION_SPECS[index].cost[level-1];if(next.coins<cost){economyNotice(b,"[PVP_ERROR_PVPCOIN_NOT_ENOUCH]");return 1;}

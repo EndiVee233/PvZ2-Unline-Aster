@@ -39,13 +39,13 @@ static bool validSilentRaids(const Economy&s){
   else if(s.shopEnemySeed[i]||s.shopEnemyKind[i])return false;
  }
  for(U i=0;i<10;++i){
-  if(s.historyMedals[i]>100000000||s.historyFlags[i]&~1u)return false;
+  if(s.historyMedals[i]>100000000||s.historyFlags[i]&~15u||s.historyFlags[i]>>1>6)return false;
   if(i>=s.historyCount){if(s.historyMedals[i]||s.historyDefended[i]||s.historyFlags[i]||s.historyFrozen[i][0]||s.historyFrozen[i][1])return false;continue;}
   const auto&h=s.history[i];
   if(h.kind==4){if(!businessId(s.historyDefended[i]))return false;}
   else if(s.historyDefended[i])return false;
   if(h.kind<3){
-   if(s.historyFlags[i])return false;
+   if(s.historyFlags[i]&1u)return false;
    if(s.historyMedals[i]){
 #ifdef PVP_DAVE_REFERENCE
     const NpcPreset* opponent=npc(h.target);
@@ -55,7 +55,7 @@ static bool validSilentRaids(const Economy&s){
 #endif
    }
   }
-  if(h.kind>=3&&!h.stars&&(h.coins||s.historyMedals[i]||s.historyFlags[i]))return false;
+  if(h.kind>=3&&!h.stars&&(h.coins||s.historyMedals[i]||(s.historyFlags[i]&1u)))return false;
  }
  for(U i=0;i<s.retaliationCount;++i){const auto&j=s.retaliations[i];const NpcPreset*n=npc(j.target);
   if(!n||n->evil||!j.seed||j.kind>7||!j.due||j.stars>3||!(j.frozenLo|j.frozenHi))return false;
@@ -132,11 +132,18 @@ static bool chooseRaidOpponent(U b,Economy&next,bool fbi,NeighborEncounter&out){
    if(e.seed&&e.kind<=7&&n&&regionOpen(n->zone)&&((e.kind==1)==fbi)){if(!pick){out=e;return true;}--pick;}
   }
  }
- // FBI can still make its single global daily roll after all visible FBI
- // houses have been refreshed away. Freeze a genuine FBI-specific formation.
+ // The independent daily roll uses the same FBI lineup as the match pool.
+#ifdef PVP_GITHUB_PRESETS
+ if(fbi)for(U entry=0;entry<sharedCount;++entry)if(sharedCatalog[entry].encounter.kind==1){
+  for(U i=0;i<NPC_COUNT;++i)if(!NPCS[i].evil&&regionOpen(NPCS[i].zone)){
+   out=sharedCatalog[entry].encounter;out.id=NPCS[i].id;return true;
+  }
+ }
+#else
  if(fbi)for(U i=0;i<NPC_COUNT;++i)if(!NPCS[i].evil&&regionOpen(NPCS[i].zone)){
   generateNeighbor(out,NPCS[i].id,neighborRandom(next.raidRng),1);return true;
  }
+#endif
  return false;
 }
 static bool planSilentRevenge(U b,Economy&next,U target,U stars){
@@ -155,6 +162,7 @@ static bool appendSilentDefense(U b,Economy&next,const NeighborEncounter&enemy,U
  U coins=stars?raidLoss(next.coins):0,medals=stars?raidLoss(next.medals):0;
  next.coins-=coins;next.medals-=medals;
 #ifdef PVP_NEIGHBOR_PROTECTION
+ U beforeCups=next.cups;
  if(!defended){
   U loss=starCups(stars);
   next.cups-=loss<next.cups?loss:next.cups;
@@ -163,6 +171,9 @@ static bool appendSilentDefense(U b,Economy&next,const NeighborEncounter&enemy,U
  U id=activeEncounterId,seed=activeEncounterSeed,kind=activeEncounterKind;
  activeEncounterId=enemy.id;activeEncounterSeed=enemy.seed;activeEncounterKind=enemy.kind;
  appendHistory(b,next,enemy.id,stars,coins);
+#ifdef PVP_NEIGHBOR_PROTECTION
+ recordHistoryCups(next,beforeCups-next.cups);
+#endif
  activeEncounterId=id;activeEncounterSeed=seed;activeEncounterKind=kind;
  next.history[0].kind=defended?4:3;next.history[0].time=when;
  next.historyMedals[0]=medals;next.historyDefended[0]=defended;

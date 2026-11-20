@@ -1,0 +1,2 @@
+# Unified diff context uses a single space for blank source lines.
+src/arm64-probe/aster-opensles.patch text eol=lf whitespace=-blank-at-eol

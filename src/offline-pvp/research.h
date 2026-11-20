@@ -1,5 +1,4 @@
 // Persist real SkillInfo grades, leaving effect properties with the engine.
-#include "research_presets.h"
 #include "research_cards.h"
 static U researchTimer[0x218/4],researchPromptUser,researchPromptIndex,researchPromptDue;
 struct ResearchView {P ui,button;U index,level,mode,second;};
@@ -13,10 +12,8 @@ static bool ensureResearch(U b,P m){
  if(!regular(b)||!ensureEconomy(b,m))return false;
  if(economyRuntime.state.researchInitialized)return true;
  Economy next=economyRuntime.state;next.researchInitialized=1;
- for(U i=0;i<4;++i){
-  P key=nullptr;narrow(b,reinterpret_cast<P>(&key),RESEARCH_SPECS[i].name);P info=call<P>(b,0x1046764,m,&key);release(b,key);
-  U level=info?at<U>(info,4):1;next.researchLevels[i]=level>=1&&level<=4?level:1;
- }
+ // Native SkillInfo belongs to the process, not to a player save.
+ for(auto& level:next.researchLevels)level=1;
  ++next.sequence;if(!saveEconomy(b,next)){economyNotice(b,"[V38_PVP_SAVE_ERROR]");return false;}
  economyRuntime.state=next;applyResearch(b,m);log(b,"research-initialized");return true;
 }
@@ -29,10 +26,7 @@ static void applyResearch(U b,P m){
   P key=nullptr;narrow(b,reinterpret_cast<P>(&key),RESEARCH_SPECS[i].name);P info=call<P>(b,0x1046764,m,&key);
   U entry[5]={reinterpret_cast<U>(key),s.researchLevels[i],1,info?at<U>(info,12):0,1};call<P>(b,0x1048dcc,m,entry);release(b,key);
  }
- if(s.researchIndex){
-  P key=nullptr;narrow(b,reinterpret_cast<P>(&key),RESEARCH_SPECS[s.researchIndex-1].name);U type[2]{};call<void>(b,0xfb6ef0,type,&key);release(b,key);
-  U now=realNow(b);at<U>(m,0x6c)=7;at<U>(m,0x70)=type[1];at<float>(m,0x74)=at<float>(call<P>(b,0x1f7380),0x24)+float(s.researchDue>now?s.researchDue-now:0);
- }
+
 }
 static void settleResearch(U b,P m){
  if(!regular(b)||!economyRuntime.loaded||economyRuntime.blocked||economyRuntime.user!=owner(b))return;
@@ -47,7 +41,7 @@ extern "C" U offlineResearchRemaining(U b,P ui){
 extern "C" void offlineResearchTick(U b,P ui){
  if(!regular(b)||!ensureResearch(b,manager(b)))return;settleResearch(b,manager(b));P info=at<P>(ui,0xc4);U index=researchIndex(info);if(index>=4)return;
  const Economy&s=economyRuntime.state;U level=s.researchLevels[index];
- U mode=s.researchIndex==index+1?1:s.researchIndex||s.evolutionIndex||s.upgradeKind?2:0;
+ U mode=s.researchIndex==index+1?1:s.researchIndex?2:0;
  bool rebuild=researchView.ui==ui&&researchView.index==index&&(researchView.level!=level||researchView.mode!=mode);
  bool selectedCardChanged=syncResearchCardGrades(b,ui,manager(b));
  bool levelChanged=(rebuild&&researchView.level!=level)||selectedCardChanged;
@@ -72,7 +66,7 @@ extern "C" U offlineResearchClick(U b,P ui,U button){
   researchFinishPrompt=true;offlineTrainingFinishPrompt(b,timer,reinterpret_cast<P>(callback));researchFinishPrompt=false;
   log(b,"research-gem-prompt",index,evolutionPrice(b,minutes));return 1;
  }
- if(next.researchIndex||next.evolutionIndex||next.upgradeKind){economyNotice(b,"[V54_UPGRADE_BUSY]");return 1;}
+ if(next.researchIndex){economyNotice(b,"[V54_UPGRADE_BUSY]");return 1;}
  U level=next.researchLevels[index];if(level>=4)return 1;
  if(next.baseLevel<RESEARCH_SPECS[index].base[level-1]){economyNotice(b,"[V54_BASE_LEVEL_REQUIRED]");return 1;}
  U cost=RESEARCH_SPECS[index].cost[level-1];if(next.coins<cost){economyNotice(b,"[PVP_ERROR_PVPCOIN_NOT_ENOUCH]");return 1;}

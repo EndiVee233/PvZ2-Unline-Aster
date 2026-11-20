@@ -1,5 +1,7 @@
 # BUILD
 
+For the A197 release, see the [host rebuild, APK packaging and verification instructions](docs/recovery/aster-A197-release.md).
+
 These notes describe how the released APK was assembled. Paths in
 `src/boot/build_single.py` are absolute placeholders from the build machine;
 adjust them for your layout.

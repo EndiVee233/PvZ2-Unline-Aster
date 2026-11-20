@@ -95,6 +95,26 @@ if(ASTER_GAME_RUNTIME AND ASTER_RUNTIME_DIAGNOSTICS)
             continue;
         }]=] host_source "${host_source}")
 endif()
+set(heap_reuse_marker "    const bool reused = base != 0;")
+string(FIND "${host_source}" "${heap_reuse_marker}" heap_marker)
+if(heap_marker EQUAL -1)
+    message(FATAL_ERROR "Unsupported A7 guest heap allocation layout")
+endif()
+string(REPLACE "${heap_reuse_marker}" "#include \"aster_heap.inc\"\n${heap_reuse_marker}"
+    host_source "${host_source}")
+string(REPLACE [=[LOGE("Guest heap exhausted:]=]
+    [=[__android_log_print(ANDROID_LOG_ERROR,"AsterArm64","Guest heap exhausted:]=]
+    host_source "${host_source}")
+string(REPLACE "    CHECK_HEAP(big2 == big);" [=[
+    CHECK_HEAP(big2 == big);
+    const uint32_t large = GuestAlloc(5 * 1024 * 1024);
+    CHECK_HEAP(large != 0);
+    if (large) MemoryWrite32(large,0xDEADBEEF);
+    GuestFree(large);
+    const uint32_t smaller = GuestAlloc(3 * 1024 * 1024);
+    CHECK_HEAP(smaller && smaller == large && MemoryRead32(smaller) == 0);
+    GuestFree(smaller);
+]=] host_source "${host_source}")
 set(audit_host "${CMAKE_CURRENT_BINARY_DIR}/aster_audit_host.cpp")
 file(CONFIGURE OUTPUT "${audit_host}" CONTENT "#include <chrono>\n${host_source}" @ONLY)
 set_source_files_properties("${host}" TARGET_DIRECTORY Android PROPERTIES HEADER_FILE_ONLY TRUE)
@@ -110,6 +130,23 @@ string(REPLACE "${guest_open}" [=[
         if(ReadOnlyMode(mode))opened.stream=asterOpenGuestProcMaps(h,path,guestMaps);
         if(!guestMaps)opened=OpenGuestFile(path,mode);
 ]=] libc_source "${libc_source}")
+string(REPLACE [=[RegisterThunk("abort",[](Jit& j,Host&){
+        LOGE("guest abort pc=]=]
+    [=[RegisterThunk("abort",[](Jit& j,Host& h){
+        const uint32_t sp=j.Regs()[13];
+        if (sp && uint64_t(sp)+128 <= h.GetGuestMemorySize()) {
+            for (uint32_t offset=0;offset<128;offset+=4) {
+                const uint32_t candidate=h.MemoryRead32(sp+offset);
+                if (candidate>=0x40000000 && candidate<0x47800000)
+                    __android_log_print(ANDROID_LOG_ERROR,"AsterArm64",
+                        "guest abort stack sp+0x%02x=0x%08x",offset,candidate);
+            }
+        }
+        __android_log_print(ANDROID_LOG_ERROR,"AsterArm64","guest abort pc=]=]
+    libc_source "${libc_source}")
+string(REPLACE [=[LOGE("guest assertion:]=]
+    [=[__android_log_print(ANDROID_LOG_ERROR,"AsterArm64","guest assertion:]=]
+    libc_source "${libc_source}")
 foreach(compare IN ITEMS strcmp strcasecmp)
     if(compare STREQUAL "strcasecmp")
         set(ignore_case "true")
@@ -124,6 +161,22 @@ foreach(compare IN ITEMS strcmp strcasecmp)
     string(REPLACE "${old_compare}" "const auto a=j.Regs();j.Regs()[0]=asterGuestStringCompare(h,a[0],a[1],${ignore_case});"
         libc_source "${libc_source}")
 endforeach()
+set(guest_sem_destroy [=[        uint32_t p=j.Regs()[0];auto sem=GetSemaphore(p);if(!sem){Failure(j,h,EINVAL);return;}
+        std::lock_guard lock(g_sync_mutex);
+        if(sem.use_count()!=2){Failure(j,h,EBUSY);return;}
+        int rc=sem_destroy(&sem->value);if(!rc){sem->live=false;g_semaphores.erase(p);h.MemoryWrite32(p,0xdeadc0de);}Result(j,h,rc);]=])
+string(FIND "${libc_source}" "${guest_sem_destroy}" sem_destroy_marker)
+if(sem_destroy_marker EQUAL -1)
+    message(FATAL_ERROR "Unsupported A7 semaphore lifetime layout")
+endif()
+# A completed sem_post may still own its host reference after waking Wwise.
+# Detach this generation under the same lock used by sem_init. Semaphore's
+# destructor releases the native object after the last in-flight call returns.
+string(REPLACE "${guest_sem_destroy}" [=[        const uint32_t address = j.Regs()[0];
+        std::lock_guard lock(g_sync_mutex);
+        if (!g_semaphores.erase(address)) { Failure(j,h,EINVAL); return; }
+        h.MemoryWrite32(address,0xdeadc0de);
+        j.Regs()[0] = 0;]=] libc_source "${libc_source}")
 set(stack_gate "if(guest.base || guest.size!=1024*1024 || (guest.flags&~1u))return ENOTSUP;")
 string(FIND "${libc_source}" "${stack_gate}" stack_marker)
 if(stack_marker EQUAL -1)
@@ -203,6 +256,14 @@ foreach(object IN ITEMS OutputMix Player)
 endforeach()
 set(audit_audio "${CMAKE_CURRENT_BINARY_DIR}/aster_audit_audio.cpp")
 file(CONFIGURE OUTPUT "${audit_audio}" CONTENT "${audio_source}" @ONLY)
+if(ASTER_GAME_RUNTIME)
+    find_package(Git REQUIRED)
+    set(audio_patch "${CMAKE_CURRENT_SOURCE_DIR}/aster-opensles.patch")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${audio}" "${audio_patch}")
+    execute_process(COMMAND "${GIT_EXECUTABLE}" apply --no-index "${audio_patch}"
+                    WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+                    COMMAND_ERROR_IS_FATAL ANY)
+endif()
 set_source_files_properties("${audio}" TARGET_DIRECTORY Android PROPERTIES HEADER_FILE_ONLY TRUE)
 file(READ "${A7_BRIDGE_SOURCE}/src/dynarmic_host.h" host_header)
 foreach(name IN ITEMS Base Stride Size)

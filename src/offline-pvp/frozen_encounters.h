@@ -24,7 +24,7 @@ static I readFrozen(U b,U lo,U hi,NeighborEncounter&out){
  I fd=call<I>(b,0x148448,file,0,0);if(fd<0)return 0;FrozenEncounter value{};U done=0;
  while(done<sizeof(value)){I n=call<I>(b,0x148460,fd,reinterpret_cast<P>(&value)+done,sizeof(value)-done);if(n<=0)break;done+=U(n);}
  char tail;I extra=call<I>(b,0x148460,fd,&tail,1);call<I>(b,0x147b90,fd);U a=0,c=0;encounterId(value.opponent,a,c);
- if(done!=20+encounterBytes(value.opponent)||extra||value.magic!=0x46455650||value.version!=1||value.user!=owner(b)||value.lo!=lo||value.hi!=hi||a!=lo||c!=hi||!validEncounter(value.opponent,value.opponent.id))return -1;
+ if(done!=20+encounterBytes(value.opponent)||extra||value.magic!=0x46455650||value.version!=1||value.user!=owner(b)||value.lo!=lo||value.hi!=hi||a!=lo||c!=hi||!validEncounter(value.opponent,value.opponent.id,false,false,true))return -1;
  out=value.opponent;return 1;
 }
 static bool freezeEncounter(U b,const NeighborEncounter&e,U*id){

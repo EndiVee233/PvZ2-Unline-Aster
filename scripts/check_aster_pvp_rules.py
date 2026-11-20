@@ -20,7 +20,11 @@ def check(folder):
     class Rules(Parent):
         def __init__(self):
             super().__init__();self.now=int(datetime(2026,11,14,12,tzinfo=timezone.utc).timestamp())
-            self.zone_objects={};self.board_zombies=[];self.tm=self.alloc(64);self.zone_list=self.alloc(12)
+            self.zone_objects={};self.board_zombies=[];self.tm=self.alloc(64)
+            self.skill_board=self.alloc(0xb00);self.skill_app=self.alloc(0x1500)
+            self.skill_holder=self.alloc(8);self.skill_registry=self.alloc(0xa00)
+            self.put(self.skill_holder,self.skill_app)
+            self.put(self.skill_app+0x6bc,self.skill_board);self.zone_list=self.skill_board+0x9ec
         def symbol(self,fragment):
             candidates=[v for k,v in self.exports.items() if fragment in k]
             assert len(candidates)==1,(fragment,candidates)
@@ -37,6 +41,7 @@ def check(folder):
             if self.payload_range[0]<=a<self.payload_range[1]:return
             if 0x10a7fd4<=off<=0x10a8008:return
             if 0x108ff0c<=off<=0x108ff20 or 0x1090244<=off<=0x1090258:return
+            if off==0x1042fe8 or 0x1088aa0<=off<0x1088af8:return
             x,y,z,w=[em.reg_read(r) for r in (UC_ARM_REG_R0,UC_ARM_REG_R1,UC_ARM_REG_R2,UC_ARM_REG_R3)]
             if a==core.END+0x300:
                 self.closed+=1;result=0
@@ -48,8 +53,13 @@ def check(folder):
             elif off in (0x23bcec,0x23bcd4):
                 pos=struct.unpack('<f',em.mem_read(x+(16 if off==0x23bcec else 20),4))[0]
                 result=math.floor((pos-(200 if off==0x23bcec else 160))/(64 if off==0x23bcec else 76))
-            elif off==0x20ec10:result=core.M+0x30000
-            elif off==0x20a1c0:result=self.zone_list
+            # The entity registry singleton is not a Board. This older
+            # backend fixture must reject that owner mix-up too; the A183
+            # check additionally executes both real native getter bodies.
+            elif off==0x20ec10:result=self.skill_registry
+            elif off==0x20a1c0:
+                assert x==self.skill_board,'skill query passed a registry instead of Board'
+                result=self.zone_list
             elif off==0x348944:result=int(x in self.zone_objects and self.zone_objects[x][2])
             elif off==0x44a310:
                 out=self.get(x);end=self.get(x+4);self.put(end,self.get(y));self.put(x+4,end+4);result=0
@@ -65,6 +75,10 @@ def check(folder):
                 text=self.get(y);self.rendered_price=bytes(em.mem_read(text,self.get(text-12)*4)).decode('utf-32-le')
                 em.reg_write(UC_ARM_REG_PC,core.END);return
             elif off==0x10449b8:result=1
+            elif off==0x1090dec:
+                module=importlib.import_module('check_offline_pvp_v60_arm').MODULE
+                assert x==module
+                self.starts+=1;self.put(module+0xb0,3);result=0
             elif off==0x109fc48 and hasattr(self,'price_template'):
                 self.rendered_currency_cost=y;em.reg_write(UC_ARM_REG_PC,core.END);return
             else:return super().hook(em,a,size,d)
@@ -81,23 +95,25 @@ def check(folder):
 
     passed=0
     # The compiled range functions, including off-lawn columns and dead filter.
-    e=Rules();center=e.point(8,2);out=e.alloc(12);buffer=e.alloc(4096);first=e.alloc(4096)
+    e=Rules();e.put(BASE+0x1821674,e.skill_holder)
+    center=e.point(8,2);out=e.alloc(12);buffer=e.alloc(4096);first=e.alloc(4096)
     points=[e.point(c,r) for c in range(5,12) for r in range(5)]
     dead=e.point(9,2,True);points.append(dead)
     for i,p in enumerate(points):e.put(first+4*i,p)
     e.put(e.zone_list,first);e.put(e.zone_list+4,first+4*len(points))
-    for name,w,h in [('offlineFoodTargets',3,3),('offlineRageTargets',5,4)]:
+    for name,w,h in [('offlineFoodTargets',3,3),('offlineRageTargets',3,3)]:
         e.put(out,buffer);e.put(out+4,buffer);e.put(out+8,buffer+4096)
         e.run(name,out,2,center+16,0)
         got={e.get(p) for p in range(buffer,e.get(out+4),4)}
         expected={p for p,(c,r,d) in e.zone_objects.items() if p in points and not d and
                   (8-w//2<=c<8-w//2+w or 9<=c<=10) and 2-h//2<=r<2-h//2+h}
         assert got==expected,(name,len(got),len(expected));passed+=1
-    for skill,offset in [('Aid',0x18),('Fog',0x14)]:
+    for skill,offset,legacy_cache in [('Aid',0x18,0x1b00000),('Fog',0x14,0x1b00004)]:
         zone=e.point(8,2);e.u.mem_write(zone+20,struct.pack('<f',198+2*76+24))
         weak=e.alloc(8);e.put(weak,zone);sub=e.alloc(40);e.put(sub+offset,weak);e.put(sub+offset+4,weak+8)
-        for grade,(w,h) in enumerate([(3,3),(3,4),(4,4),(4,5)],1):
-            e.put(BASE+e.symbol('skill'+skill+'Grade'),grade)
+        cache=next((address for name,address in e.exports.items() if 'skill'+skill+'Grade' in name),legacy_cache)
+        for grade,(w,h) in enumerate([(3,3)]*4,1):
+            e.put(BASE+cache,grade)
             for p in points:
                 c,r,_=e.zone_objects[p];e.stub(0x1001a60 if skill=='Aid' else 0x10060cc,sub,p)
                 want=int((8-w//2<=c<8-w//2+w or 9<=c<=10) and 2-h//2<=r<2-h//2+h)
@@ -173,29 +189,33 @@ def check(folder):
         passed+=1
     saved={k:bytearray(v) for k,v in e.files.items()};r=Rules();r.files=saved;r.now=e.now;r.enter();r.run('offlineGarden')
     assert (r.field(2),r.field(3))==(e.field(2),e.field(3));passed+=1
-    # Use the same persisted result fields written on a real Dave victory.
+    six_rounds=any('daveTargetForCycle' in name for name in e.exports)
+    # Use the same persisted result fields written on a completed visit.
+    if six_rounds:e.put(e.state()+216,6)
     e.put(e.state()+2912+4*4,0);e.put(e.state()+2912+5*4,1)
     e.invoke('saveEconomy',e.state());e.run('offlineGarden')
     assert not e.field(4) and not e.field(5) and all(e.get(p)!=0x70000007 for p in e.residents())
     e.run('offlineGarden');assert not e.field(4);passed+=1
     # Execute the actual zero-id special-house route from its relocated plot.
-    flow=Rules();flow.enter();flow.run('offlineGarden');flow.train();flow.advance(31)
-    flow.run('offlineTrainingTick',flow.get(M+0x20))
-    dave=next(p for p in flow.residents() if flow.get(p)==0x70000007)
-    flow.selected(dave);before=len(flow.loads)
-    flow.stub(0x1042fe8,M,0,4,0)
-    assert len(flow.loads)==before+1 and flow.get(BASE+flow.symbol('arenaNpc'))==0x70000007
-    passed+=1
     battle=importlib.import_module('check_offline_pvp_v60_arm')
-    battle.board(flow)
-    flow.run(0x1030a50,M+0x14300,1);flow.deaths(0)
-    flow.run('offlineBattleResult',M,1,0x70000007,1)
-    assert flow.u.reg_read(UC_ARM_REG_R0)==1
-    assert flow.field(4)==0 and flow.field(5)==1
-    flow.run('offlineGarden')
-    assert not flow.field(5) and all(flow.get(p)!=0x70000007 for p in flow.residents())
-    passed+=1
-    # Ordinary attacks: fee tiers, atomic refusal, no double debit and refund.
+    if six_rounds:
+        passed+=check_dave_challenge(Rules,core,battle,UC_ARM_REG_R0)
+    else:
+        flow=Rules();flow.enter();flow.run('offlineGarden');flow.train();flow.advance(31)
+        flow.run('offlineTrainingTick',flow.get(M+0x20))
+        dave=next(p for p in flow.residents() if flow.get(p)==0x70000007)
+        flow.selected(dave);before=len(flow.loads)
+        flow.stub(0x1042fe8,M,0,4,0)
+        assert len(flow.loads)==before+1 and flow.get(BASE+flow.symbol('arenaNpc'))==0x70000007
+        battle.board(flow)
+        flow.run(0x1030a50,M+0x14300,1);flow.deaths(0)
+        flow.run('offlineBattleResult',M,1,0x70000007,1)
+        assert flow.u.reg_read(UC_ARM_REG_R0)==1
+        assert flow.field(4)==0 and flow.field(5)==1
+        flow.run('offlineGarden')
+        assert not flow.field(5) and all(flow.get(p)!=0x70000007 for p in flow.residents())
+        passed+=2
+    # Ordinary attacks: fixed fee, atomic refusal, no double debit and refund.
     e=Rules();e.enter();wallet=e.state()+12;e.put(wallet,100000);e.invoke('saveEconomy',e.state())
     target=0x70000002
     e.price_template='{CURRENCY_COST}攻击!';label=e.alloc(4);key=e.alloc(4);template=e.alloc(4)
@@ -203,8 +223,10 @@ def check(folder):
         e.stub(site,label,template,key,original);text=e.get(label);length=e.get(text-12)
         return bytes(e.u.mem_read(text,length*4)).decode('utf-32-le')
     e.put(BASE+e.symbol('arenaNpc'),target)
+    fixed_scout_rewards='offlineScoutRewards' in e.exports
+    if fixed_scout_rewards:e.put(BASE+e.symbol('arenaUser'),e.get(core.PM+0x74))
     for index in range(18):
-        fee=10 if index<5 else 20 if index<10 else 50 if index<15 else 100
+        fee=10
         assert shown()==f'<IMAGE:ARENA_MONEY>{fee}攻击!';passed+=1
         assert shown(0x109f308,500)==f'<IMAGE:ARENA_MONEY>{fee}攻击!';passed+=1
         # Execute the real scout refresh tail: its literal localized key,
@@ -223,8 +245,13 @@ def check(folder):
     e.now+=86400;before=e.get(wallet);assert e.start(target) and e.get(wallet)==before-10
     e.invoke('closeAbandonedBattle',M);passed+=1
     e.put(BASE+e.symbol('arenaNpc'),0x70000007)
-    assert shown()=='<IMAGE:ARENA_MONEY>1攻击!';passed+=1
-    # The old fixed plot follows the same fee tiers and NPC resolution.
+    dave_fee=30 if six_rounds else 0 if fixed_scout_rewards else 1
+    assert shown()==f'<IMAGE:ARENA_MONEY>{dave_fee}攻击!';passed+=1
+    if six_rounds:
+        for entry in (0x108ff0c,0x1090244):
+            e.u.reg_write(UC_ARM_REG_R8,e.alloc(0x200));e.run(entry)
+            assert e.rendered_currency_cost==30;passed+=1
+    # The old fixed plot follows the same fixed fee and NPC resolution.
     before=e.get(wallet);assert e.start(0x70000012) and e.get(wallet)==before-10
     e.invoke('closeAbandonedBattle',M);passed+=1
     count=e.field(1);before=e.get(wallet);assert e.start(target,False)
@@ -252,28 +279,134 @@ def check(folder):
     f.click_research(ui)
     importlib.import_module('check_offline_pvp_v48_arm').SessionEngine.confirm(f,f.research_timer)
     f.run('offlineResearchTick',ui)
-    assert f.get(f.get(cards+4)+0x1f8)==2 and f.get(BASE+f.symbol('skillFogGrade'))==2
+    assert f.get(f.get(cards+4)+0x1f8)==2 and f.get(f.state()+308+4)==2
     passed+=1
     remembered=Rules();remembered.files={k:bytearray(v) for k,v in f.files.items()};remembered.enter()
-    assert remembered.get(BASE+remembered.symbol('skillFogGrade'))==2
+    assert remembered.get(remembered.state()+308+4)==2
     zone=remembered.point(4,2);remembered.u.mem_write(zone+20,struct.pack('<f',198+2*76+24))
     weak=remembered.alloc(8);remembered.put(weak,zone);sub=remembered.alloc(40)
     remembered.put(sub+0x14,weak);remembered.put(sub+0x18,weak+8)
-    # In-game grade II is 4 rows, not the 5 rows reserved for grade IV.
-    for grade,rows,cols in [(1,3,3),(2,4,3),(3,4,4),(4,5,4)]:
+    # Research grades persist, but every grade keeps the same 3x3 footprint.
+    for grade,rows,cols in [(1,3,3),(2,3,3),(3,3,3),(4,3,3)]:
         remembered.put(remembered.state()+308+4,grade)
         remembered.invoke('applyResearch',M)
-        assert remembered.get(BASE+remembered.symbol('skillFogGrade'))==grade
         for col,row in [(4,r) for r in range(5)]+[(c,2) for c in range(1,8)]:
             target=remembered.point(col,row);remembered.stub(0x10060cc,sub,target)
             want=int(4-cols//2<=col<4-cols//2+cols and 2-rows//2<=row<2-rows//2+rows)
             assert remembered.u.reg_read(UC_ARM_REG_R0)==want,(grade,col,row)
         passed+=1
     f.put(PM+0x74,43);f.put(core.PROFILE+0x75c,1);f.enter()
-    assert f.get(BASE+f.symbol('skillFogGrade'))==1 and f.get(BASE+f.symbol('skillAidGrade'))==1
+    for name in ('skillFogGrade', 'skillAidGrade'):
+        cache=next((address for key,address in f.exports.items() if name in key),None)
+        if cache is not None:assert f.get(BASE+cache)==1
     passed+=1
     result=dict(arm_rule_cases_passed=passed,device_saves_touched=False,runtime_game_verified=False)
     (folder/'pvp-rule-checks.json').write_text(json.dumps(result,indent=2)+'\n');print(json.dumps(result))
+
+
+def check_dave_challenge(Engine,core,battle,return_register):
+    base,m=core.BASE,core.M
+    dave_id=0x70000007
+    wins, open_payment, stage, fee=216,224,236,240
+    app=m+0x7000
+    flow=Engine();flow.enter();flow.run('offlineGarden')
+
+    def house(engine):
+        return next((p for p in engine.residents() if engine.get(p)==dave_id),None)
+
+    def restart(engine, days=0):
+        resumed=Engine();resumed.copy_state(engine);resumed.now=engine.now+days*86400
+        resumed.enter();resumed.run('offlineGarden')
+        return resumed
+
+    def set_coins(engine, coins):
+        engine.put(engine.state()+12,coins);engine.invoke('saveEconomy',engine.state())
+        engine.enter()
+
+    def scout(engine):
+        engine.selected(house(engine));before=len(engine.loads)
+        engine.stub(0x1042fe8,m,0,4,0)
+        assert len(engine.loads)==before+1
+        battle.board(engine)
+        assert engine.get(battle.MODULE+0xb0)==2
+
+    def settle(engine, stars, medals):
+        engine.deaths(0)
+        engine.run('offlineBattleResult',m,stars,dave_id,1)
+        assert engine.u.reg_read(return_register)==1
+        assert [engine.get(m+o) for o in (0xc4,0xc8,0xcc)]==[0,medals,0]
+        assert not engine.get(engine.state()+open_payment)
+        before=engine.stored()
+        engine.run('offlineBattleResult',m,stars,dave_id,1)
+        assert engine.stored()==before
+        window=engine.alloc(0xe0);engine.put(app+0x139c,window)
+        engine.run('offlineResultContinue',window,0)
+        engine.put(app+0x6bc,0)
+        engine.put(core.GM+0x984,25);engine.put(core.GM+0xa24,0xffffffff)
+        engine.run('offlineGarden')
+
+    flow.put(base+0x1830948,m)  # Native Dave button's manager singleton.
+    set_coins(flow,29)
+    scout(flow)
+    flow.run(0x1088aa0)
+    assert flow.get(m+4)==29 and flow.starts==0 and flow.get(m+0x100)&255==1
+    set_coins(flow,400)
+    flow.failwrite=True;flow.run(0x1088aa0);flow.failwrite=False
+    assert flow.get(m+4)==400 and flow.starts==0
+    flow.run(0x1088aa0)
+    assert flow.get(m+4)==370 and flow.starts==1
+    settle(flow,0,0)
+    assert flow.get(m+0x15c)==0 and house(flow)
+    passed=3
+
+    target=flow.field(3);cycle=flow.field(2)
+    for round_index, medals in enumerate((250,300,350,400,450,500)):
+        assert house(flow) and flow.get(house(flow)+44)==round_index
+        before_coins, before_medals=flow.get(m+4),flow.get(m+8)
+        if round_index==2:
+            # A reload-style attack must use the same price and journal.
+            flow.selected(house(flow));flow.stub(0x1042fe8,m,0,1,0)
+            assert flow.get(flow.state()+stage)==1
+            battle.board(flow)
+        else:
+            scout(flow)
+            assert flow.get(m+4)==before_coins
+            flow.run(0x1088aa0);flow.run(0x1088aa0)
+        assert flow.get(m+4)==before_coins-30
+        assert flow.get(flow.state()+stage)==2 and flow.get(flow.state()+fee)==30
+        settle(flow,1,medals)
+        assert flow.get(m+8)==before_medals+medals and flow.get(m+0x15c)==round_index+1
+        assert flow.field(1)==0  # Never increases the ordinary-neighbor counter.
+        if round_index<5:
+            assert flow.field(2)==cycle and flow.field(3)==target and house(flow)
+        passed+=1
+        if round_index==0:
+            resumed=restart(flow)
+            assert house(resumed) and resumed.field(3)==target and resumed.get(m+0x15c)==1
+            migrated=restart(flow)
+            migrated.put(migrated.state()+2924,0);migrated.put(migrated.state()+2928,0)
+            migrated.invoke('saveEconomy',migrated.state())
+            migrated=restart(migrated)
+            assert house(migrated) and migrated.field(3)==target and migrated.get(m+0x15c)==1
+            overdue=restart(flow,3)
+            assert overdue.field(2)>cycle and house(overdue) and overdue.get(m+0x15c)==1
+            passed+=3
+    assert not house(flow) and any(flow.get(p)==target for p in flow.residents())
+    done=restart(flow,1)
+    assert not house(done) and done.get(m+0x15c)==6
+    renewed=restart(flow,3)
+    assert renewed.field(2)>cycle and house(renewed) and renewed.get(m+0x15c)==0
+    passed+=2
+
+    for started in (False,True):
+        interrupted=restart(renewed)
+        before=interrupted.get(m+4)
+        assert interrupted.start(dave_id,started) and interrupted.get(m+4)==before-30
+        recovered=restart(interrupted)
+        assert recovered.get(m+4)==before-30*started
+        assert not recovered.get(recovered.state()+open_payment) and recovered.get(recovered.state()+wins)==0
+        passed+=1
+    return passed
 
 
 if __name__=='__main__':check(Path(sys.argv[1]).resolve())

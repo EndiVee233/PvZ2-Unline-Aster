@@ -1,6 +1,19 @@
 // The journal commits with army losses and battle rewards, never in a second
 // file after payment. Only completed local battles enter this ten-row list.
 static constexpr U HISTORY_NAMESPACE=0x4c4f434c;
+#ifdef PVP_NEIGHBOR_PROTECTION
+// Bit zero remains the original revenge flag. A zero cup code is a legacy row.
+static void recordHistoryCups(Economy& state,U amount){
+ state.historyFlags[0]=(state.historyFlags[0]&1u)|((amount+1)<<1);
+}
+static U historyCups(const Economy& state,U index){
+ U code=state.historyFlags[index]>>1;
+ if(code)return code-1;
+ const auto& record=state.history[index];const NpcPreset* opponent=npc(record.target);
+ if((record.kind==1&&opponent&&!opponent->evil)||record.kind==3)return starCups(record.stars);
+ return 0;
+}
+#endif
 static P historyBrief,historyUi;
 static U historyUiUser;
 extern "C" U offlineHistoryMode(){return 1;}
@@ -52,6 +65,9 @@ extern "C" P offlineHistoryLookup(U b,U serial,U high){
  U index=U(h-economyRuntime.state.history);
  at<U>(historyBrief,0xb0)=economyRuntime.state.historyMedals[index];
  at<U>(historyBrief,0xb8)=economyRuntime.state.historyFlags[index]&1;
+#ifdef PVP_NEIGHBOR_PROTECTION
+ at<U>(historyBrief,0xac)=historyCups(economyRuntime.state,index);
+#endif
 #endif
  const NpcPreset*n=npc(h->target);const BusinessPlot*s=businessId(h->target);
  const U*name=n?n->name:s?s->name:nullptr;
@@ -85,9 +101,18 @@ extern "C" U offlineHistoryLoad(U b,P ui){
 extern "C" void offlineHistoryRowReady(U b,P row){
  if(!row||at<U>(row,0xac)!=HISTORY_NAMESPACE||historyUiUser!=owner(b)||!regular(b))return;
  const auto*h=findHistory(at<U>(row,0xa8));if(!h)return;
- // The old residential renderer hides starcoins for its obsolete game mode.
- // Local residential rewards are starcoins, so keep the original third icon.
- at<U>(row,0xd0)=h->coins;
+ // The old mode-specific branch hides one reward column after loading it.
+ // Project all three currencies into the native renderer's own column slots.
+#ifdef PVP_SILENT_RAIDS
+ U index=U(h-economyRuntime.state.history);
+ at<U>(row,0xd0)=economyRuntime.state.historyMedals[index];
+#ifdef PVP_NEIGHBOR_PROTECTION
+ at<U>(row,0xcc)=historyCups(economyRuntime.state,index);
+#endif
+#else
+ at<U>(row,0xd0)=0;
+#endif
+ at<U>(row,0xc8)=h->coins;
  for(U o=0xb0;o<=0xb4;o+=4)if(P button=at<P>(row,o)){
   bool allow=false;
 #ifdef PVP_SILENT_RAIDS

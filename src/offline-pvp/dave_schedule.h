@@ -17,11 +17,27 @@ static bool daveCandidate(const NpcPreset&n){
 #endif
  ;
 }
+static U daveTargetForCycle(U user,U cycle){
+ U count=0;for(const auto&n:NPCS)if(daveCandidate(n))++count;
+ if(!count)return 0;
+ U pick=neighborRemainder(neighborMix(user^cycle^0x85c41d29u),count);
+ for(const auto&n:NPCS)if(daveCandidate(n)){
+  if(!pick)return n.id;
+  --pick;
+ }
+ return 0;
+}
 static bool ensureDaveSchedule(U b,P m){
  if(!ensureNeighborRoster(b,m))return false;
  U day;if(!pvpCivilDay(b,day))return false;
  Economy next=economyRuntime.state;
- // A defeated visitor becomes an ordinary (not special/shared) new neighbor.
+ const NpcPreset* paid=next.battleOpen?npc(next.battleNpc):nullptr;
+ if(paid&&paid->evil){at<U>(m,0x15c)=next.daveWins;return true;}
+ // Older saves retired Dave after every win. Resume a partial cycle, even
+ // when the original slot has already been restored to an ordinary neighbor.
+ const bool unfinished=next.daveWins>0&&next.daveWins<DAVE_ROUND_COUNT;
+ if(next.daveReplacement&&unfinished){next.daveActive=1;next.daveReplacement=0;}
+ // A completed visitor becomes an ordinary (not special/shared) new neighbor.
  if(next.daveReplacement){
   if(!replaceDaveNeighbor(b,next.daveTarget,next.daveRefreshDay))return false;
   next.neighborProtectedUntil[neighborProtectionIndex(npc(next.daveTarget))]=0;
@@ -34,25 +50,26 @@ static bool ensureDaveSchedule(U b,P m){
  if(moveHome&&cycle<next.daveRefreshDay)cycle=next.daveRefreshDay;
 #endif
  if(cycle>next.daveRefreshDay||moveHome){
+  U target=daveTargetForCycle(owner(b),cycle);if(!target)return false;
   if(next.daveActive){
    if(!replaceDaveNeighbor(b,next.daveTarget,next.daveRefreshDay))return false;
    next.neighborProtectedUntil[neighborProtectionIndex(npc(next.daveTarget))]=0;
   }
-  U count=0;for(const auto& n:NPCS)if(daveCandidate(n))++count;
-  if(!count)return false;
-  U pick=neighborRemainder(neighborMix(owner(b)^cycle^0x85c41d29u),count);
-  for(const auto& n:NPCS)if(daveCandidate(n)){
-   if(!pick){next.daveTarget=n.id;break;}--pick;
-  }
-  next.daveRefreshDay=cycle;next.daveActive=1;
+  next.daveTarget=target;next.daveRefreshDay=cycle;next.daveActive=1;
+ }else if(unfinished&&!next.daveActive&&next.daveRefreshDay){
+  U target=daveTargetForCycle(owner(b),next.daveRefreshDay);if(!target)return false;
+  next.daveTarget=target;next.daveActive=1;
  }
+ // The next scheduled visit after six wins starts a new challenge. An old
+ // active save at six wins is already in a later visit and can restart here.
+ if(next.daveActive&&next.daveWins==DAVE_ROUND_COUNT)next.daveWins=0;
  const Economy&old=economyRuntime.state;
- if(next.daveRefreshDay!=old.daveRefreshDay||next.daveTarget!=old.daveTarget||next.daveReplacement!=old.daveReplacement){
+ if(next.daveRefreshDay!=old.daveRefreshDay||next.daveTarget!=old.daveTarget||next.daveActive!=old.daveActive||
+    next.daveReplacement!=old.daveReplacement||next.daveWins!=old.daveWins){
   ++next.sequence;if(!saveEconomy(b,next)){economyNotice(b,"[V38_PVP_SAVE_ERROR]");return false;}
   economyRuntime.state=next;log(b,"dave-schedule",next.daveRefreshDay,next.daveTarget);
  }
- U wins=next.daveWins;
- at<U>(m,0x15c)=next.daveActive&&wins>=DAVE_ROUND_COUNT?DAVE_ROUND_COUNT-1:wins;
+ at<U>(m,0x15c)=next.daveWins;
  return true;
 }
 static void removeScheduledDaveRecords(U b,P m){

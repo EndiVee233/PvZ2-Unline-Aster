@@ -22,7 +22,7 @@ static U neighborChecksumBytes(const unsigned char*p,U size){
  return hash;
 }
 static U neighborChecksum(const NeighborRoster&r){return neighborChecksumBytes(reinterpret_cast<const unsigned char*>(&r),sizeof(r));}
-static bool validEncounter(const NeighborEncounter&e,U expected,bool legacy=false,bool allowUnnamed=false){
+static bool validEncounter(const NeighborEncounter&e,U expected,bool legacy=false,bool allowUnnamed=false,bool allowDisabled=false){
  if(e.id!=expected)return false;
  if(!e.seed){if(e.kind||e.cups||e.count)return false;return true;}
  bool shared=false;
@@ -37,7 +37,7 @@ static bool validEncounter(const NeighborEncounter&e,U expected,bool legacy=fals
  U spent=0;bool varied=false;
  for(U i=0;i<e.count;++i){const auto&q=e.plants[i];const auto*p=neighborPlant(q.type);
 #ifdef PVP_UNIQUE_NEIGHBORS
-  if(legacy)p=legacyNeighborPlant(q.type);
+  if(legacy||(!p&&allowDisabled))p=legacyNeighborPlant(q.type);
 #endif
   if(!p||!q.level||q.level>p->maxLevel||q.row>=5||q.col>=9)return false;
   spent+=p->cost;varied|=q.level!=e.plants[0].level;U copies=1;
@@ -62,7 +62,7 @@ static bool validRoster(const NeighborRoster&r,U user){
  }
 #endif
  if(r.magic!=0x4e425650||!version||r.user!=user||!r.rng||r.checksum!=neighborChecksum(r))return false;
- U slot=0;for(U i=0;i<NPC_COUNT;++i)if(!NPCS[i].evil){if(slot>=NEIGHBOR_SLOT_COUNT||!validEncounter(r.entries[slot++],NPCS[i].id,r.version==1))return false;}
+ U slot=0;for(U i=0;i<NPC_COUNT;++i)if(!NPCS[i].evil){if(slot>=NEIGHBOR_SLOT_COUNT||!validEncounter(r.entries[slot++],NPCS[i].id,r.version==1,false,true))return false;}
  return slot==NEIGHBOR_SLOT_COUNT;
 }
 static void neighborPath(U user,char*out,bool tmp){
@@ -106,21 +106,20 @@ static NeighborEncounter* findEncounter(NeighborRoster&r,U id){
  for(U i=0;i<NEIGHBOR_SLOT_COUNT;++i)if(r.entries[i].id==id)return r.entries+i;return nullptr;
 }
 #ifdef PVP_UNIQUE_NEIGHBORS
-static U presentSpecials(const NeighborRoster&r,U exceptId=0){
- U used=0;for(U i=0;i<NEIGHBOR_SLOT_COUNT;++i){const auto&e=r.entries[i];if(e.id!=exceptId&&e.seed&&e.kind>=2&&e.kind<=7)used|=1u<<e.kind;}return used;
-}
-static U newAreaSpecial(NeighborRoster&r){
- U used=presentSpecials(r),total=0;for(U kind=2;kind<=7;++kind)if(!(used&(1u<<kind)))total+=kind<=4?3:2;
- if(!total)return 1;U pick=neighborRemainder(neighborRandom(r.rng),total);
- for(U kind=2;kind<=7;++kind)if(!(used&(1u<<kind))){U weight=kind<=4?3:2;if(pick<weight)return kind;pick-=weight;}
- return 1;
-}
 static void migrateNeighborRoster(NeighborRoster&r){
  U seen=0;
- for(U i=0;i<NEIGHBOR_SLOT_COUNT;++i){auto&e=r.entries[i];if(!e.seed)continue;bool banned=false;
-  for(U k=0;k<e.count;++k)if(!neighborPlant(e.plants[k].type))banned=true;
+ for(U i=0;i<NEIGHBOR_SLOT_COUNT;++i){auto&e=r.entries[i];if(!e.seed)continue;
+  U retained=0;
+  for(U k=0;k<e.count;++k)if(neighborPlant(e.plants[k].type))e.plants[retained++]=e.plants[k];
+  bool banned=retained!=e.count;e.count=retained;
   bool duplicate=e.kind>=2&&e.kind<=7&&(seen&(1u<<e.kind));
-  if(banned||duplicate){U id=e.id,kind=duplicate?8:e.kind?e.kind:8;generateNeighbor(e,id,neighborRandom(r.rng),kind);}
+  bool legacySpecial=false;
+#ifdef PVP_GITHUB_PRESETS
+  legacySpecial=e.kind>=1&&e.kind<=7&&!e.title[0];
+#endif
+  if((banned&&!validEncounter(e,e.id))||duplicate||legacySpecial){
+   U id=e.id,cups=e.cups;generateNeighbor(e,id,neighborRandom(r.rng),0,cups>550?550:cups);
+  }
   if(e.kind>=2&&e.kind<=7)seen|=1u<<e.kind;
  }
  r.version=2;
@@ -139,17 +138,14 @@ static U matchedNeighborCups(U playerCups,U seed){
 #ifdef PVP_GITHUB_PRESETS
 #include "shared_neighbors.h"
 #endif
-static void generateRosterNeighbor(NeighborRoster&r,NeighborEncounter&e,U id,U seed,U kind=0,U excludeShared=0){
+static void generateRosterNeighbor(NeighborRoster&r,NeighborEncounter&e,U id,U seed,U excludeShared=0,bool allowSpecial=true){
  U cups=0xffffffffu;
 #ifdef PVP_CUP_MATCHING
  cups=matchedNeighborCups(economyRuntime.state.cups,seed);
 #endif
- generateNeighbor(e,id,seed,kind,cups);
-#ifdef PVP_UNIQUE_NEIGHBORS
- if(e.kind>=2&&e.kind<=7&&(presentSpecials(r,id)&(1u<<e.kind)))generateNeighbor(e,id,seed,8,cups);
-#endif
+ generateNeighbor(e,id,seed,0,cups);
 #ifdef PVP_GITHUB_PRESETS
- if(!e.kind)pickSharedNeighbor(r,e,id,seed,cups,excludeShared);
+ pickSharedNeighbor(r,e,id,seed,cups,excludeShared,allowSpecial);
 #endif
 }
 static bool ensureNeighborRoster(U b,P m){
@@ -169,26 +165,19 @@ static bool ensureNeighborRoster(U b,P m){
 #ifdef PVP_UNIQUE_NEIGHBORS
  needed=neighborRoster->version<2;
 #endif
- for(U i=0;i<NEIGHBOR_SLOT_COUNT;++i){const auto&e=neighborRoster->entries[i];const NpcPreset*n=npc(e.id);if(n&&regionOpen(n->zone)&&!e.seed)needed=true;}
+ for(U i=0;i<NEIGHBOR_SLOT_COUNT;++i){const auto&e=neighborRoster->entries[i];const NpcPreset*n=npc(e.id);if(n&&regionOpen(n->zone)&&!e.seed)needed=true;
+#ifdef PVP_GITHUB_PRESETS
+  if(e.kind>=1&&e.kind<=7&&!e.title[0])needed=true;
+#endif
+  for(U k=0;k<e.count;++k)if(!neighborPlant(e.plants[k].type))needed=true;}
  if(!needed)return true;
  auto*next=reinterpret_cast<NeighborRoster*>(call<P>(b,0x147938,sizeof(NeighborRoster)));if(!next)return false;*next=*neighborRoster;
 #ifdef PVP_UNIQUE_NEIGHBORS
- if(next->version<2)migrateNeighborRoster(*next);
+ migrateNeighborRoster(*next);
 #endif
- for(U zone=1;zone<=6;++zone){if(!regionOpen(zone))continue;bool newArea=true;
-  for(U i=0;i<NEIGHBOR_SLOT_COUNT;++i){const auto&e=next->entries[i];const NpcPreset*n=npc(e.id);if(n&&n->zone==zone&&e.seed)newArea=false;}
-  for(U i=0;i<NEIGHBOR_SLOT_COUNT;++i){auto&e=next->entries[i];const NpcPreset*n=npc(e.id);if(!n||n->zone!=zone||e.seed)continue;
-   U kind=0;if(zone==1&&n->position==5)kind=1;
-   else if(zone>1&&newArea&&n->position==1){
-#ifdef PVP_UNIQUE_NEIGHBORS
-    kind=newAreaSpecial(*next);
-#else
-    kind=specialNeighborRoll(neighborRandom(next->rng)%17);
-#endif
-   }
-   U id=e.id;generateRosterNeighbor(*next,e,id,neighborRandom(next->rng),kind);
-   if(zone==1&&n->position==5)for(U k=0;k<45;++k){e.plants[k].type=34;e.plants[k].level=neighborPlant(34)->maxLevel;}
-  }
+ for(auto& e:next->entries){
+  const NpcPreset*n=npc(e.id);
+  if(n&&regionOpen(n->zone)&&!e.seed)generateRosterNeighbor(*next,e,e.id,neighborRandom(next->rng));
  }
  ++next->sequence;bool ok=saveRoster(b,*next);
  if(ok){*neighborRoster=*next;log(b,"neighbors-generated",next->sequence,NEIGHBOR_SLOT_COUNT);}else economyNotice(b,"[V38_PVP_SAVE_ERROR]");
@@ -211,7 +200,7 @@ static void projectDynamicNeighbor(U b,P m,const NpcPreset&n){
 #ifdef PVP_GITHUB_PRESETS
  if(e->kind==SHARED_NEIGHBOR)displayName=e->title;
 #endif
- alignas(8) U record[16]={n.id,0,0,n.level,e->cups,0,100,n.zone,n.position,1,0,0,0,0,1,0};
+ alignas(8) U record[16]={n.id,0,0,n.level,e->cups,0,THREE_STAR_RAID_COINS,n.zone,n.position,1,0,0,0,0,NEIGHBOR_ATTACK_FEE,0};
 #ifdef PVP_NEIGHBOR_PROTECTION
  record[5]=starCups(3);
  if(U until=neighborProtectionUntil(b,n)){
@@ -258,22 +247,19 @@ static U neighborAction(U b,P panel,U button){
  auto*entry=findEncounter(*next,n->id);const auto*old=findEncounter(*neighborRoster,n->id);
  U excludeShared=0;
 #ifdef PVP_GITHUB_PRESETS
- if(old->kind==SHARED_NEIGHBOR)excludeShared=old->seed;
+ if(old->kind==SHARED_NEIGHBOR||old->kind==1)excludeShared=old->seed;
 #endif
- generateRosterNeighbor(*next,*entry,n->id,neighborRandom(next->rng),0,excludeShared);
+ generateRosterNeighbor(*next,*entry,n->id,neighborRandom(next->rng),excludeShared);
  U kind=entry->kind;
  for(U attempt=0;attempt<16;++attempt){
 #ifdef PVP_GITHUB_PRESETS
-  if(entry->kind==SHARED_NEIGHBOR)break;
+  if(entry->kind==SHARED_NEIGHBOR||entry->kind==1)break;
 #endif
   bool sameName=false;if(kind==old->kind&&(kind==0||kind==4)){U a[40]{},c[40]{};neighborName(entry->seed,kind,a);neighborName(old->seed,kind,c);sameName=true;for(U i=0;i<40;++i)if(a[i]!=c[i])sameName=false;}
   if(!sameName&&(kind==1||entry->cups!=old->cups))break;
-  generateRosterNeighbor(*next,*entry,n->id,neighborRandom(next->rng),kind?kind:8,excludeShared);
+  generateRosterNeighbor(*next,*entry,n->id,neighborRandom(next->rng),excludeShared,false);
  }
- if(entry->kind==1&&old->kind==1&&entry->plants[0].type==old->plants[0].type){
-  U type=old->plants[0].type==34?314:34;
-  for(U k=0;k<45;++k){entry->plants[k].type=type;entry->plants[k].level=neighborPlant(type)->maxLevel;}
- }
+
  ++next->sequence;bool ok=saveRoster(b,*next);
  if(ok){*neighborRoster=*next;projectDynamicNeighbor(b,manager(b),*n);log(b,"neighbor-replaced",n->id,entry->cups);
   U zone=n->zone,pos=n->position;neighborPanel=nullptr;call<void>(b,0x100a864,map);call<void>(b,0x1019668,map,5,zone,pos);

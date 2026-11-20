@@ -1,4 +1,4 @@
-// Ordinary local neighbors only. Dave's challenge rewards are a separate task.
+// All paid local attacks use the same journal and refund rules.
 static U paidBattleSerial,paidBattleUser;
 static bool paidBattleMatches(U b,const Economy&s){
  return paidBattleUser==owner(b)&&paidBattleSerial&&s.battleOpen==paidBattleSerial&&s.battleNpc==arenaNpc;
@@ -7,7 +7,9 @@ static void closeBattleJournal(Economy&s){
  s.battleSettled=s.battleOpen;s.battleOpen=s.battleNpc=s.battleStage=s.battleFee=0;
 }
 static bool beginBattleFee(U b,P m,const NpcPreset&n,bool live){
+#ifndef PVP_WEEKLY_RULES
  if(n.evil)return true;
+#endif
  if(!ensureEconomy(b,m))return false;
 #ifdef PVP_NEIGHBOR_PROTECTION
  if(rejectProtectedNeighbor(b,n))return false;
@@ -16,7 +18,10 @@ static bool beginBattleFee(U b,P m,const NpcPreset&n,bool live){
  if(next.battleOpen){log(b,"battle-payment-already-open",next.battleOpen,next.battleNpc);return false;}
  U fee=1;
 #ifdef PVP_WEEKLY_RULES
- if(isNeighborAttack(n.id)){prepareNeighborAttackDay(b,next);fee=neighborAttackFee(next.neighborAttacks);}
+ if(n.evil){
+  if(!next.daveActive||next.daveWins>=DAVE_ROUND_COUNT)return false;
+  fee=DAVE_ATTACK_FEE;
+ }else if(isNeighborAttack(n.id)){prepareNeighborAttackDay(b,next);fee=NEIGHBOR_ATTACK_FEE;}
 #endif
  if(next.coins<fee){economyNotice(b,"[PVP_ERROR_PVPCOIN_NOT_ENOUCH]");return false;}
  if(next.battleSerial==0xffffffffu){economyNotice(b,"[V38_PVP_SAVE_ERROR]");return false;}
@@ -57,7 +62,7 @@ static bool closeAbandonedBattle(U b,P m){
 }
 static bool settleBattleReward(U b,Economy&next,U stars){
  if(stars>3||!paidBattleMatches(b,next))return false;
- U reward=100*stars/3;
+ U reward=THREE_STAR_RAID_COINS*stars/3;
  // The hard storage limit must not trap a completed battle in its result UI.
  if(reward>2000000000u-next.coins)reward=2000000000u-next.coins;
  next.coins+=reward;closeBattleJournal(next);return true;

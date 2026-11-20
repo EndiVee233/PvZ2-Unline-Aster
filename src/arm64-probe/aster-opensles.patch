@@ -1,0 +1,344 @@
+--- a/aster_audit_audio.cpp
++++ b/aster_audit_audio.cpp
+@@ -64,7 +64,10 @@
+ // High-capacity ring buffer for OpenSL ES hardware audio stream (128 buffers = ~2.7s cushion)
+ static constexpr size_t BUFFER_QUEUE_COUNT = 128;
+ static constexpr size_t MAX_BUFFER_SIZE = 16384;
+-static uint8_t g_hostAudioBuffers[BUFFER_QUEUE_COUNT][MAX_BUFFER_SIZE];
++// One spare slot is necessary: enqueue can fail after the PCM has been copied.
++// Even a completely full hardware FIFO can never own this next write slot.
++static constexpr size_t AUDIO_STORAGE_SLOTS = BUFFER_QUEUE_COUNT + 1;
++static uint8_t g_hostAudioBuffers[AUDIO_STORAGE_SLOTS][MAX_BUFFER_SIZE];
+ static size_t g_currentBufferIndex = 0;
+ static std::mutex g_audioMutex;
+ static std::mutex g_guestRunMutex;
+@@ -81,15 +84,22 @@
+ // Background Audio Thread synchronization
+ static std::atomic<bool> g_audioThreadRunning{false};
+ static std::atomic<bool> g_audioPaused{false};
+-static std::mutex g_audioCvMutex;
+-static std::condition_variable g_audioCv;
++// A completion can arrive between the worker checking the queue and sleeping.
++// An atomic generation remembers that wake even after the HAL queue drains.
++static std::atomic<uint32_t> g_audioWake{0};
++static void wakeAudioWorker() {
++    g_audioWake.fetch_add(1, std::memory_order_release);
++    g_audioWake.notify_one();
++}
+ static std::unique_ptr<std::thread> g_audioThread;
+ 
+ // Host OpenSL ES Buffer Queue Callback (fired on real-time audio thread by Android HAL)
+ static void HostBqPlayerCallback(SLAndroidSimpleBufferQueueItf bq, void *context) {
+     g_bqCallbackPending.fetch_add(1, std::memory_order_relaxed);
+-    g_audioCv.notify_one();
+-}
++    wakeAudioWorker();
++}
++
++#include "aster_audio_output.inc"
+ 
+ bool IID_Matches(DynarmicHost& host, uint32_t iid_ptr, const SLInterfaceID host_iid) {
+     if (iid_ptr == 0 || !host_iid) return false;
+@@ -142,9 +152,20 @@
+     int pending = g_bqCallbackPending.exchange(0, std::memory_order_acq_rel);
+     while (pending > 0) {
+         pending--;
+-        if (g_guestCallbackAddr != 0) {
+-            host.RunFunction(g_guestCallbackAddr, {g_guestBufferQueueInterfaceAddr, g_guestCallbackContext});
+-        }
++        uint32_t callback, context, queueInterface;
++        {
++            std::lock_guard<std::mutex> lock(g_audioMutex);
++            if (!g_guestCallbackAddr || !g_hostPlayerBufferQueue) break;
++            SLAndroidSimpleBufferQueueState state{};
++            if ((*g_hostPlayerBufferQueue)->GetState(g_hostPlayerBufferQueue, &state) != SL_RESULT_SUCCESS ||
++                state.index == g_deliveredAudioIndex) break;
++            ++g_deliveredAudioIndex;
++            callback = g_guestCallbackAddr;
++            context = g_guestCallbackContext;
++            queueInterface = g_guestBufferQueueInterfaceAddr;
++        }
++        // The Wwise callback can call Enqueue or Clear again.
++        host.RunFunction(callback, {queueInterface, context});
+     }
+ }
+ 
+@@ -162,13 +183,12 @@
+ #endif
+ 
+     while (g_audioThreadRunning.load(std::memory_order_relaxed)) {
+-        {
+-            std::unique_lock<std::mutex> lock(g_audioCvMutex);
+-            g_audioCv.wait(lock, []() {
+-                return !g_audioThreadRunning.load(std::memory_order_relaxed) ||
+-                       (!g_audioPaused.load(std::memory_order_relaxed) &&
+-                        g_bqCallbackPending.load(std::memory_order_relaxed) > 0);
+-            });
++        const auto generation = g_audioWake.load(std::memory_order_acquire);
++        if (!g_audioThreadRunning.load(std::memory_order_acquire)) break;
++        if (g_audioPaused.load(std::memory_order_acquire) ||
++            g_bqCallbackPending.load(std::memory_order_acquire) == 0) {
++            g_audioWake.wait(generation, std::memory_order_acquire);
++            continue;
+         }
+ 
+         if (!g_audioThreadRunning.load(std::memory_order_relaxed)) break;
+@@ -195,7 +215,7 @@
+ void StopAudioThread() {
+     if (!g_audioThreadRunning.load(std::memory_order_relaxed)) return;
+     g_audioThreadRunning.store(false, std::memory_order_relaxed);
+-    g_audioCv.notify_all();
++    wakeAudioWorker();
+     if (g_audioThread && g_audioThread->joinable()) {
+         g_audioThread->join();
+     }
+@@ -205,6 +225,7 @@
+ void PauseAudioPlayback() {
+     LOGI("PauseAudioPlayback requested");
+     g_audioPaused.store(true, std::memory_order_release);
++    std::lock_guard<std::mutex> lock(g_audioMutex);
+     if (g_hostPlayerPlay) {
+         (*g_hostPlayerPlay)->SetPlayState(g_hostPlayerPlay, SL_PLAYSTATE_PAUSED);
+     }
+@@ -213,13 +234,14 @@
+ void ResumeAudioPlayback() {
+     LOGI("ResumeAudioPlayback requested");
+     g_audioPaused.store(false, std::memory_order_release);
++    std::lock_guard<std::mutex> lock(g_audioMutex);
+     if (g_hostPlayerPlay) {
+         (*g_hostPlayerPlay)->SetPlayState(g_hostPlayerPlay, SL_PLAYSTATE_PLAYING);
+     }
+     // A callback can arrive while the guest is paused.  Wake the dedicated
+     // pump so the pending queue is serviced immediately after resume instead
+     // of waiting for another hardware callback.
+-    g_audioCv.notify_one();
++    wakeAudioWorker();
+ }
+ 
+ uint32_t GetOpenSLESInterfacePointer(const std::string& name) {
+@@ -261,6 +283,9 @@
+             result = (*g_hostEngineObject)->Realize(g_hostEngineObject, SL_BOOLEAN_FALSE);
+             if (result != SL_RESULT_SUCCESS) {
+                 LOGE("Host Engine Realize failed: %u", result);
++                (*g_hostEngineObject)->Destroy(g_hostEngineObject);
++                g_hostEngineObject = nullptr;
++                g_hostEngineEngine = nullptr;
+                 jit.Regs()[0] = result;
+                 return;
+             }
+@@ -268,6 +293,9 @@
+             result = (*g_hostEngineObject)->GetInterface(g_hostEngineObject, SL_IID_ENGINE, &g_hostEngineEngine);
+             if (result != SL_RESULT_SUCCESS) {
+                 LOGE("Host Engine GetInterface failed: %u", result);
++                (*g_hostEngineObject)->Destroy(g_hostEngineObject);
++                g_hostEngineObject = nullptr;
++                g_hostEngineEngine = nullptr;
+                 jit.Regs()[0] = result;
+                 return;
+             }
+@@ -275,7 +303,16 @@
+             // Create Host OutputMix
+             result = (*g_hostEngineEngine)->CreateOutputMix(g_hostEngineEngine, &g_hostOutputMixObject, 0, nullptr, nullptr);
+             if (result == SL_RESULT_SUCCESS) {
+-                (*g_hostOutputMixObject)->Realize(g_hostOutputMixObject, SL_BOOLEAN_FALSE);
++                result = (*g_hostOutputMixObject)->Realize(g_hostOutputMixObject, SL_BOOLEAN_FALSE);
++            }
++            if (result != SL_RESULT_SUCCESS) {
++                if (g_hostOutputMixObject) (*g_hostOutputMixObject)->Destroy(g_hostOutputMixObject);
++                (*g_hostEngineObject)->Destroy(g_hostEngineObject);
++                g_hostOutputMixObject = nullptr;
++                g_hostEngineObject = nullptr;
++                g_hostEngineEngine = nullptr;
++                jit.Regs()[0] = result;
++                return;
+             }
+         }
+ 
+@@ -327,6 +364,9 @@
+ 
+     manager.RegisterThunk("SLObject_Destroy", [](Dynarmic::A32::Jit& jit, DynarmicHost& host) {
+         LOGI("SLObject_Destroy called");
++        const uint32_t object = jit.Regs()[0];
++        if (object && (object == g_guestPlayerObjectAddr || object == g_guestOutputMixObjectAddr ||
++                       object == g_guestEngineObjectAddr)) closeAsterAudioPlayer();
+     });
+ 
+     // 3. SLEngine_GetInterface
+@@ -436,34 +476,15 @@
+         };
+         SLDataSink audioSnk = { &loc_outmix, nullptr };
+ 
+-        const SLInterfaceID ids[4] = { SL_IID_ANDROIDSIMPLEBUFFERQUEUE, SL_IID_PLAY, SL_IID_VOLUME, SL_IID_ANDROIDCONFIGURATION };
+-        const SLboolean req[4] = { SL_BOOLEAN_TRUE, SL_BOOLEAN_TRUE, SL_BOOLEAN_TRUE, SL_BOOLEAN_TRUE };
+-
+-        if (g_hostEngineEngine && !g_hostPlayerObject) {
+-            SLresult res = (*g_hostEngineEngine)->CreateAudioPlayer(
+-                g_hostEngineEngine, &g_hostPlayerObject, &audioSrc, &audioSnk, 4, ids, req);
+-            if (res == SL_RESULT_SUCCESS) {
+-                // Set Android Media Stream Type BEFORE Realize
+-                SLAndroidConfigurationItf configItf = nullptr;
+-                if ((*g_hostPlayerObject)->GetInterface(g_hostPlayerObject, SL_IID_ANDROIDCONFIGURATION, &configItf) == SL_RESULT_SUCCESS) {
+-                    SLint32 streamType = SL_ANDROID_STREAM_MEDIA;
+-                    (*configItf)->SetConfiguration(configItf, SL_ANDROID_KEY_STREAM_TYPE, &streamType, sizeof(SLint32));
+-                }
+-
+-                (*g_hostPlayerObject)->Realize(g_hostPlayerObject, SL_BOOLEAN_FALSE);
+-                (*g_hostPlayerObject)->GetInterface(g_hostPlayerObject, SL_IID_PLAY, &g_hostPlayerPlay);
+-                (*g_hostPlayerObject)->GetInterface(g_hostPlayerObject, SL_IID_ANDROIDSIMPLEBUFFERQUEUE, &g_hostPlayerBufferQueue);
+-                (*g_hostPlayerObject)->GetInterface(g_hostPlayerObject, SL_IID_VOLUME, &g_hostPlayerVolume);
+-
+-                if (g_hostPlayerVolume) {
+-                    (*g_hostPlayerVolume)->SetVolumeLevel(g_hostPlayerVolume, 0); // 0 mB = 100% full volume
+-                }
+-
+-                (*g_hostPlayerBufferQueue)->RegisterCallback(g_hostPlayerBufferQueue, HostBqPlayerCallback, nullptr);
+-                LOGI("Host Audio Player created and realized successfully!");
+-            } else {
+-                LOGE("Host CreateAudioPlayer failed: %u", res);
+-            }
++        auto rc = openAsterAudioPlayer(&audioSrc, &audioSnk);
++        if (rc == SL_RESULT_RESOURCE_ERROR || rc == SL_RESULT_RESOURCE_LOST) {
++            std::this_thread::sleep_for(std::chrono::milliseconds(25));
++            rc = openAsterAudioPlayer(&audioSrc, &audioSnk);
++        }
++        if (rc != SL_RESULT_SUCCESS) {
++            if (pPlayer) host.MemoryWrite32(pPlayer, 0);
++            jit.Regs()[0] = rc;
++            return;
+         }
+ 
+         // Allocate Guest Player Object
+@@ -572,63 +593,61 @@
+     manager.RegisterThunk("SLPlay_SetPlayState", [](Dynarmic::A32::Jit& jit, DynarmicHost& host) {
+         uint32_t state = jit.Regs()[1];
+         LOGI("SLPlay_SetPlayState: %u", state);
+-        if (g_hostPlayerPlay) {
+-            (*g_hostPlayerPlay)->SetPlayState(g_hostPlayerPlay, static_cast<SLuint32>(state));
+-        }
+-        jit.Regs()[0] = SL_RESULT_SUCCESS;
++        std::lock_guard<std::mutex> lock(g_audioMutex);
++        jit.Regs()[0] = g_hostPlayerPlay ? (*g_hostPlayerPlay)->SetPlayState(g_hostPlayerPlay, state)
++                                          : SL_RESULT_PRECONDITIONS_VIOLATED;
+     });
+ 
+     manager.RegisterThunk("SLPlay_GetPlayState", [](Dynarmic::A32::Jit& jit, DynarmicHost& host) {
+         uint32_t pState = jit.Regs()[1];
+-        if (pState) {
+-            SLuint32 state = SL_PLAYSTATE_PLAYING;
+-            if (g_hostPlayerPlay) (*g_hostPlayerPlay)->GetPlayState(g_hostPlayerPlay, &state);
+-            host.MemoryWrite32(pState, state);
+-        }
+-        jit.Regs()[0] = SL_RESULT_SUCCESS;
++        std::lock_guard<std::mutex> lock(g_audioMutex);
++        SLuint32 state = SL_PLAYSTATE_STOPPED;
++        SLresult rc = !pState ? SL_RESULT_PARAMETER_INVALID : !g_hostPlayerPlay ?
++            SL_RESULT_PRECONDITIONS_VIOLATED : (*g_hostPlayerPlay)->GetPlayState(g_hostPlayerPlay, &state);
++        if (rc == SL_RESULT_SUCCESS) host.MemoryWrite32(pState, state);
++        jit.Regs()[0] = rc;
+     });
+ 
+     // 8. SLBufferQueue Thunks
+     manager.RegisterThunk("SLBufferQueue_RegisterCallback", [](Dynarmic::A32::Jit& jit, DynarmicHost& host) {
+-        g_guestCallbackAddr = jit.Regs()[1];
+-        g_guestCallbackContext = jit.Regs()[2];
+-        LOGI("SLBufferQueue_RegisterCallback: callback=0x%08X, context=0x%08X",
+-             g_guestCallbackAddr, g_guestCallbackContext);
+-        jit.Regs()[0] = SL_RESULT_SUCCESS;
++        jit.Regs()[0] = registerAsterAudioCallback(jit.Regs()[1], jit.Regs()[2]);
+     });
+ 
+     manager.RegisterThunk("SLBufferQueue_Clear", [](Dynarmic::A32::Jit& jit, DynarmicHost& host) {
+-        if (g_hostPlayerBufferQueue) (*g_hostPlayerBufferQueue)->Clear(g_hostPlayerBufferQueue);
+-        jit.Regs()[0] = SL_RESULT_SUCCESS;
++        jit.Regs()[0] = clearAsterAudioQueue();
+     });
+ 
+     manager.RegisterThunk("SLBufferQueue_GetState", [](Dynarmic::A32::Jit& jit, DynarmicHost& host) {
+         uint32_t pState = jit.Regs()[1];
+-        if (pState) {
+-            SLAndroidSimpleBufferQueueState state = {0, 0};
+-            if (g_hostPlayerBufferQueue) {
+-                (*g_hostPlayerBufferQueue)->GetState(g_hostPlayerBufferQueue, &state);
+-            }
+-            host.MemoryWrite32(pState + 0, state.count);
++        std::lock_guard<std::mutex> lock(g_audioMutex);
++        SLAndroidSimpleBufferQueueState state{};
++        SLresult rc = !pState ? SL_RESULT_PARAMETER_INVALID : !g_hostPlayerBufferQueue ?
++            SL_RESULT_PRECONDITIONS_VIOLATED : (*g_hostPlayerBufferQueue)->GetState(g_hostPlayerBufferQueue, &state);
++        if (rc == SL_RESULT_SUCCESS) {
++            host.MemoryWrite32(pState, state.count);
+             host.MemoryWrite32(pState + 4, state.index);
+         }
+-        jit.Regs()[0] = SL_RESULT_SUCCESS;
++        jit.Regs()[0] = rc;
+     });
+ 
+     manager.RegisterThunk("SLBufferQueue_Enqueue", [](Dynarmic::A32::Jit& jit, DynarmicHost& host) {
+         uint32_t self = jit.Regs()[0];
+         uint32_t pBuffer = jit.Regs()[1];
+         uint32_t size = jit.Regs()[2];
++        std::lock_guard<std::mutex> lock(g_audioMutex);
+         static uint32_t s_enq_count = 0;
+         if (++s_enq_count <= 10 || s_enq_count % 200 == 0) {
+             LOGI("SLBufferQueue_Enqueue #%u: size=%u, pBuffer=0x%08X, idx=%zu", s_enq_count, size, pBuffer, g_currentBufferIndex);
+         }
+ 
+-        if (size > 0 && pBuffer) {
++        if (size > 0 && pBuffer && uint64_t(pBuffer) + size <= host.GetGuestMemorySize()) {
+             const void* guest_buf = GuestToHost(host.GetGuestMemoryBase(), pBuffer);
+             if (guest_buf && g_hostPlayerBufferQueue) {
+-                std::lock_guard<std::mutex> lock(g_audioMutex);
+-                size_t copy_size = std::min(static_cast<size_t>(size), MAX_BUFFER_SIZE);
++                if (size > MAX_BUFFER_SIZE) {
++                    jit.Regs()[0] = SL_RESULT_BUFFER_INSUFFICIENT;
++                    return;
++                }
++                const size_t copy_size = size;
+                 memcpy(g_hostAudioBuffers[g_currentBufferIndex], guest_buf, copy_size);
+ 
+                 SLresult res = (*g_hostPlayerBufferQueue)->Enqueue(
+@@ -636,23 +655,34 @@
+                     g_hostAudioBuffers[g_currentBufferIndex],
+                     static_cast<SLuint32>(copy_size)
+                 );
+-                g_currentBufferIndex = (g_currentBufferIndex + 1) % BUFFER_QUEUE_COUNT;
+-                if (res == SL_RESULT_BUFFER_INSUFFICIENT) {
+-                    res = SL_RESULT_SUCCESS;
++                if (res == SL_RESULT_SUCCESS) {
++                    g_currentBufferIndex = (g_currentBufferIndex + 1) % AUDIO_STORAGE_SLOTS;
++                    static bool heard = false;
++                    if (!heard) {
++                        const auto* pcm = static_cast<const uint8_t*>(guest_buf);
++                        for (size_t i = 0; i + 1 < copy_size; i += 2) {
++                            int16_t sample;
++                            memcpy(&sample, pcm + i, sizeof(sample));
++                            if (sample > 64 || sample < -64) {
++                                __android_log_print(ANDROID_LOG_INFO, "AsterAudio", "First non-silent PCM buffer accepted");
++                                heard = true;
++                                break;
++                            }
++                        }
++                    }
+                 }
+                 jit.Regs()[0] = res;
+                 return;
+             }
+         }
+-        jit.Regs()[0] = SL_RESULT_SUCCESS;
++        jit.Regs()[0] = g_hostPlayerBufferQueue ? SL_RESULT_PARAMETER_INVALID : SL_RESULT_PRECONDITIONS_VIOLATED;
+     });
+ 
+     // 9. SLVolume Thunk
+     manager.RegisterThunk("SLVolume_SetVolumeLevel", [](Dynarmic::A32::Jit& jit, DynarmicHost& host) {
+         int32_t level = static_cast<int32_t>(jit.Regs()[1]);
+-        if (g_hostPlayerVolume) {
+-            (*g_hostPlayerVolume)->SetVolumeLevel(g_hostPlayerVolume, level);
+-        }
+-        jit.Regs()[0] = SL_RESULT_SUCCESS;
+-    });
+-}
++        std::lock_guard<std::mutex> lock(g_audioMutex);
++        jit.Regs()[0] = g_hostPlayerVolume ? (*g_hostPlayerVolume)->SetVolumeLevel(g_hostPlayerVolume, level)
++                                           : SL_RESULT_FEATURE_UNSUPPORTED;
++    });
++}

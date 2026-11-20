@@ -123,14 +123,7 @@ extern "C" U offlineUpgradeClick(U b,P ui,U button){
   if(next.upgradeKind==kind){
    U seconds=next.upgradeDue-realNow(b);call<void>(b,0x10747d0,ui,(seconds+59)/60);return 1;
   }
-  if(next.upgradeKind
-#ifdef PVP_EVOLUTION
-    ||next.evolutionIndex
-#endif
-#ifdef PVP_SKILL_RESEARCH
-    ||next.researchIndex
-#endif
-  ){economyNotice(b,"[V54_UPGRADE_BUSY]");return 1;}
+  if(next.upgradeKind){economyNotice(b,"[V54_UPGRADE_BUSY]");return 1;}
   if(levelOf(next,kind)>=20)return 1;
   if(kind!=1&&levelOf(next,kind)>=next.baseLevel){economyNotice(b,"[V54_BASE_LEVEL_REQUIRED]");return 1;}
   U cost=upgradeCost(next,kind);if(next.coins<cost){economyNotice(b,"[PVP_ERROR_PVPCOIN_NOT_ENOUCH]");return 1;}

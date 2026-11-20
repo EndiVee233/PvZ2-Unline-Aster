@@ -1,5 +1,8 @@
 // The offline wallet/queue is app-owned state, included by the save snapshot.
 #include "training_presets.h"
+#ifdef PVP_SKILL_RESEARCH
+#include "research_presets.h"
+#endif
 struct LocalTrain {U held,queued,due;};
 struct Economy {U magic,version,user,coins,home,sequence,checksum,reserved;LocalTrain trains[TRAIN_COUNT];
  U initialized,medals,baseLevel,sunLevel,campLevel,upgradeKind,upgradeDue,producedAt,coinFraction,medalFraction,daveWins;
@@ -92,18 +95,21 @@ static bool validEconomy(const Economy&s,U user){
 #ifdef PVP_BUSINESS_BATTLE
  target=target||businessId(s.battleNpc);
 #endif
- if(s.battleOpen!=s.battleSerial||s.battleOpen<=s.battleSettled||!target||s.battleStage<1||s.battleStage>2||(s.battleFee!=1
+ bool fee=s.battleFee==1;
 #ifdef PVP_WEEKLY_RULES
- &&(s.version<18||(s.battleFee!=10&&s.battleFee!=20&&s.battleFee!=50&&s.battleFee!=100))
+ if(s.version>=18){
+  if(n&&n->evil){target=s.daveActive==1&&s.daveWins<DAVE_ROUND_COUNT;fee=s.battleFee==DAVE_ATTACK_FEE;}
+  else fee=fee||s.battleFee==NEIGHBOR_ATTACK_FEE||s.battleFee==20||s.battleFee==50||s.battleFee==100;
+ }
 #endif
- ))return false;}
+ if(s.battleOpen!=s.battleSerial||s.battleOpen<=s.battleSettled||!target||!fee||s.battleStage<1||s.battleStage>2)return false;}
   else if(s.battleNpc||s.battleStage||s.battleFee||s.battleSettled!=s.battleSerial)return false;
  }
 #endif
 #ifdef PVP_EVOLUTION
  version=version||s.version==4;
  if(s.evolutionInitialized){
-  if(s.evolutionInitialized!=1||s.evolutionIndex>TRAIN_COUNT||bool(s.evolutionIndex)!=bool(s.evolutionDue)||s.evolutionIndex&&s.upgradeKind)return false;
+  if(s.evolutionInitialized!=1||s.evolutionIndex>TRAIN_COUNT||bool(s.evolutionIndex)!=bool(s.evolutionDue))return false;
   for(U i=0;i<TRAIN_COUNT;++i)if(s.evolutionLevels[i]<1||s.evolutionLevels[i]>4)return false;
   if(s.evolutionIndex&&s.evolutionLevels[s.evolutionIndex-1]>=4)return false;
  }else if(s.evolutionIndex||s.evolutionDue)return false;
@@ -111,14 +117,14 @@ static bool validEconomy(const Economy&s,U user){
 #ifdef PVP_SKILL_RESEARCH
  version=version||s.version==5;
  if(s.researchInitialized){
-  if(s.researchInitialized!=1||s.researchIndex>4||bool(s.researchIndex)!=bool(s.researchDue)||s.researchIndex&&(s.upgradeKind||s.evolutionIndex))return false;
+  if(s.researchInitialized!=1||s.researchIndex>4||bool(s.researchIndex)!=bool(s.researchDue))return false;
   for(U i=0;i<4;++i)if(s.researchLevels[i]<1||s.researchLevels[i]>4)return false;
   if(s.researchIndex&&s.researchLevels[s.researchIndex-1]>=4)return false;
  }else if(s.researchIndex||s.researchDue)return false;
 #endif
 #ifdef PVP_DAVE_NARRATIVE
  version=version||s.version==6;
- if(s.daveDialogueSeen>s.daveDialogueSerial||s.daveDialogueOutcome>6||s.daveDialogueOutcome>s.daveWins||!s.daveDialogueSerial&&(s.daveDialogueSeen||s.daveDialogueOutcome))return false;
+ if(s.daveDialogueSeen>s.daveDialogueSerial||s.daveDialogueOutcome>6||!s.daveDialogueSerial&&(s.daveDialogueSeen||s.daveDialogueOutcome))return false;
 #endif
 #ifdef PVP_EXCHANGE
  version=version||s.version==7;
@@ -202,7 +208,7 @@ static bool validEconomy(const Economy&s,U user){
 #ifdef PVP_SILENT_RAIDS
    defense=(h.kind==3||h.kind==4)&&n&&!n->evil;
 #endif
-   if(!h.serial||h.serial>s.sequence||i&&h.serial>=s.history[i-1].serial||!h.time||(!n&&!shop)||h.stars>3||h.coins>(defense?100000000u:100u)||(!defense&&h.kind!=(shop?2u:1u))||n&&n->evil&&h.coins)return false;
+   if(!h.serial||h.serial>s.sequence||i&&h.serial>=s.history[i-1].serial||!h.time||(!n&&!shop)||h.stars>3||h.coins>(defense?100000000u:300u)||(!defense&&h.kind!=(shop?2u:1u))||n&&n->evil&&h.coins)return false;
   }
  }
 #endif
@@ -377,6 +383,33 @@ static void applyEconomy(U b,P m){
  if(r.state.researchInitialized)applyResearch(b,m);
 #endif
 }
+static void projectPlayerProgress(U b,P m,const Economy* saved){
+ at<U>(m,0x15c)=saved?saved->daveWins:0;
+ at<U>(m,0x6c)=0;at<U>(m,0x70)=0;at<float>(m,0x74)=0x1.fffffep127f;
+ at<U>(m,0x10)=saved?(saved->initialized?saved->baseLevel:saved->home):1;
+#ifdef PVP_SKILL_RESEARCH
+ for(U i=0;i<4;++i){
+  P key=nullptr;narrow(b,reinterpret_cast<P>(&key),RESEARCH_SPECS[i].name);
+  P info=call<P>(b,0x1046764,m,&key);release(b,key);
+  if(info)at<U>(info,4)=saved&&saved->researchInitialized?saved->researchLevels[i]:1;
+ }
+#endif
+#ifdef PVP_EVOLUTION
+ for(U i=0;i<TRAIN_COUNT;++i){
+  P key=nullptr;narrow(b,reinterpret_cast<P>(&key),TRAIN_SPECS[i].name);
+  P info=call<P>(b,0x104673c,m,&key);release(b,key);
+  if(info)at<U>(info,4)=saved&&saved->evolutionInitialized?saved->evolutionLevels[i]:1;
+ }
+#endif
+}
+extern "C" void offlinePvpProfileSelected(U b){
+ auto& runtime=economyRuntime;
+ if(!runtime.loaded)return;
+ if(runtime.user!=owner(b)){
+  projectPlayerProgress(b,manager(b),nullptr);
+  runtime.camp=nullptr;
+ }else if(!runtime.camp&&!runtime.blocked)projectPlayerProgress(b,manager(b),&runtime.state);
+}
 static bool ensureEconomy(U b,P m,bool entering=false){
  if(!regular(b)&&!entering)return false;EconomyRuntime&r=economyRuntime;U user=owner(b);
  if(!r.loaded||r.user!=user){r.loaded=true;r.user=user;r.lastTick=0;r.camp=nullptr;r.blocked=false;r.state=Economy{};
@@ -385,8 +418,9 @@ static bool ensureEconomy(U b,P m,bool entering=false){
 #endif
   I found=loadEconomy(b,r.state);
   r.loadedFromDisk=found==1;
-  if(found<0){r.blocked=true;log(b,"economy-invalid");return false;}
-  if(!found){r.state.magic=0x45435650;r.state.version=2;r.state.user=user;r.state.coins=at<U>(m,4);r.state.home=at<U>(m,0x10);if(!r.state.home||r.state.home>20)r.state.home=1;}
+  if(found<0){projectPlayerProgress(b,m,nullptr);r.blocked=true;log(b,"economy-invalid");return false;}
+  if(!found){r.state.magic=0x45435650;r.state.version=2;r.state.user=user;r.state.coins=at<U>(m,4);r.state.home=1;}
+  projectPlayerProgress(b,m,found?&r.state:nullptr);
 #ifdef PVP_REGIONS
   if(!r.state.regionsInitialized){
    Economy next=r.state;next.regionsInitialized=1;

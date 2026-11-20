@@ -88,9 +88,10 @@ uint32_t registerResourceHash(DynarmicHost& host) {
     });
 }
 bool installResourceHash(DynarmicHost& host,uint32_t replacement) {
-    // Static v163 GLShim helper; reject another binary rather than guessing.
-    constexpr uint32_t function=0x4504e98c;
+    // A175 moved the GLShim entries. Verify their prologues for either layout.
+    constexpr uint32_t updated=0x4504ea10,legacy=0x4504e98c;
     constexpr uint8_t expected[]={0xf0,0xb5,0x03,0xaf,0x2d,0xe9,0x00,0x07,0xd7,0xe9,0x02,0xa8,0x40,0xf6,0xb0,0x7c};
+    const uint32_t function=memcmp(host.GetGuestMemoryBase()+updated,expected,sizeof(expected)) ? legacy : updated;
     if (!replacement || memcmp(host.GetGuestMemoryBase()+function,expected,sizeof(expected))) return false;
     const auto input=host.GuestAlloc(4096);
     if (!input) return false;
@@ -124,8 +125,10 @@ uint32_t registerResourceCodec(DynarmicHost& host) {
     });
 }
 bool installResourceCodec(DynarmicHost& host,uint32_t replacement) {
-    constexpr uint32_t functions[]={0x45051eb0,0x47047108};
+    constexpr uint32_t updated=0x4505203c,legacy=0x45051eb0;
     constexpr uint8_t expected[]={0xf0,0xb5,0x03,0xaf,0x4d,0xf8,0x04,0x8d,0x8a,0xb0,0x0e,0x46,0xb9,0x68,0x04,0x46};
+    const uint32_t shimDecoder=memcmp(host.GetGuestMemoryBase()+updated,expected,sizeof(expected)) ? legacy : updated;
+    const uint32_t functions[]={shimDecoder,0x47047108};
     for (auto fn : functions) if (memcmp(host.GetGuestMemoryBase()+fn,expected,sizeof(expected))) return false;
     const auto data=host.GuestAlloc(16),output=host.GuestAlloc(6*6*4);
     if (!data || !output) return false;
@@ -225,8 +228,14 @@ bool bootstrap(JNIEnv* env) {
     if (!registerAsterDynamicLoader(*runtime,manager)) return false;
     auto& jni=FakeJniEnv::Instance();
     if (!jni.Init(*runtime) || !runtime->LoadGuestLibraries(manager)) return false;
-    if (!installResourceHash(*runtime,hashThunk)) return false;
-    if (!installResourceCodec(*runtime,codecThunk)) return false;
+    if (!installResourceHash(*runtime,hashThunk)) {
+        __android_log_print(ANDROID_LOG_ERROR,"AsterArm64","GLShim resource hash thunk could not be installed");
+        return false;
+    }
+    if (!installResourceCodec(*runtime,codecThunk)) {
+        __android_log_print(ANDROID_LOG_ERROR,"AsterArm64","ASTC decoder thunks could not be installed");
+        return false;
+    }
 #ifdef ASTER_RUNTIME_DIAGNOSTICS
     if (!installAnimationTrace(*runtime,animationTrace)) return false;
 #endif

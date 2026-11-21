@@ -140,6 +140,30 @@ public final class AsterRgbaPilot {
         File current = new File(base, RESOURCE);
         File pending = new File(base, PREFIX + ".next");
         File ready = new File(base, PREFIX + ".sha256");
+        File override = AsterLocalFiles.dynamicOverride(context);
+        if (AsterLocalFiles.isBundle(override)) {
+            byte[] hash = digest(override);
+            if (!matches(current, (int)override.length(), hash)) {
+                File partial = new File(base, PREFIX + ".override-partial");
+                try {
+                    try (InputStream in = new FileInputStream(override);
+                         FileOutputStream out = new FileOutputStream(partial)) {
+                        byte[] buffer = new byte[256 * 1024];
+                        int count;
+                        while ((count = in.read(buffer)) != -1) out.write(buffer, 0, count);
+                        out.getFD().sync();
+                    }
+                    if (!matches(partial, (int)override.length(), hash))
+                        throw new IOException("Local resource changed during startup");
+                    Os.rename(partial.getPath(), current.getPath());
+                } finally {
+                    partial.delete();
+                }
+            }
+            active = true;
+            Log.i(TAG, "Mounted local dynamic bundle " + override.getPath());
+            return true;
+        }
         try (DataInputStream plan = openPlan(context)) {
             int sourceSize = plan.readInt();
             int targetSize = plan.readInt();

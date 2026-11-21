@@ -13,6 +13,9 @@ public final class PvpMusic {
     private static final String TAG = "PvpMusic";
     private static final long FADE_MS = 900;
     private static final long FADE_STEP_MS = 25;
+    // Calibrated against the Egypt world map on WSA at the same music setting.
+    private static final float STREET_GAIN = 0.159f;
+    private static final float BATTLE_GAIN = 0.318f;
     private static final Runnable FADE = PvpMusic::advanceFade;
     private static MediaPlayer player;
     private static int track;
@@ -102,7 +105,7 @@ public final class PvpMusic {
     }
 
     private static void applyGain() {
-        float volume = gain * fadeGain;
+        float volume = gain * fadeGain * (track == 1 ? STREET_GAIN : BATTLE_GAIN);
         player.setVolume(volume, volume);
     }
 

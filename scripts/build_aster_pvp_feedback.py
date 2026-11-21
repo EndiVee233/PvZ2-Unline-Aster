@@ -28,7 +28,7 @@ def sha(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def catalogue_dex(original, sdk, output):
+def catalogue_dex(original, sdk, output, *, prefixes=FILE_PREFIXES):
     output.mkdir(exist_ok=True)
     source = ROOT / 'src/bootstrap-extra' / JAVA_PREFIX
     android = sdk / 'platforms/android-34/android.jar'
@@ -53,7 +53,7 @@ def catalogue_dex(original, sdk, output):
     old_tree, new_tree = output / 'old-smali', output / 'new-smali'
     subprocess.run([*repair, 'decode', original_path, old_tree], check=True)
     subprocess.run([*repair, 'decode', dex / 'classes.dex', new_tree], check=True)
-    for prefix in FILE_PREFIXES:
+    for prefix in prefixes:
         original_types = list((old_tree / JAVA_PREFIX).glob(prefix + '*.smali'))
         replacement_types = list((new_tree / JAVA_PREFIX).glob(prefix + '*.smali'))
         if not original_types or not replacement_types:

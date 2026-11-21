@@ -115,7 +115,7 @@ def patch_boot(dex, out):
     return rebuild_bootstrap(dex, out, changes, ROOT / 'tools/apktool.jar')
 
 
-def compile_pilot(out, sdk, ndk, astc):
+def compile_pilot_dex(out, sdk):
     source = ROOT / 'src/bootstrap-extra'
     classes = out / 'classes'
     dex = out / 'dex'
@@ -125,13 +125,20 @@ def compile_pilot(out, sdk, ndk, astc):
     tools = sdk / 'build-tools/34.0.0'
     subprocess.run(['javac', '-source', '8', '-target', '8', '-Xlint:-options',
                     '-bootclasspath', android, '-d', classes,
-                    source / 'com/popcap/pvz2cthd/AsterRgbaPilot.java'], check=True)
+                    *(source / 'com/popcap/pvz2cthd' / (name + '.java')
+                      for name in ('AsterRgbaPilot', 'AsterLocalFiles'))], check=True)
     jar = out / 'pilot.jar'
     with ZipFile(jar, 'w') as archive:
         for path in sorted(classes.rglob('*.class')):
             archive.write(path, path.relative_to(classes).as_posix())
     subprocess.run(['java', '-Xmx256m', '-cp', tools / 'lib/d8.jar', 'com.android.tools.r8.D8',
                     '--min-api', '21', '--lib', android, '--output', dex, jar], check=True)
+    return (dex / 'classes.dex').read_bytes()
+
+
+def compile_pilot(out, sdk, ndk, astc):
+    dex = compile_pilot_dex(out, sdk)
+    source = ROOT / 'src/bootstrap-extra'
     clang = ndk / 'toolchains/llvm/prebuilt/windows-x86_64/bin/clang++.exe'
     names = ('astc_file', 'codec', 'endpoint_codec', 'footprint', 'integer_sequence_codec',
              'intermediate_astc_block', 'logical_astc_block', 'partition', 'physical_astc_block',
@@ -146,7 +153,7 @@ def compile_pilot(out, sdk, ndk, astc):
         objects.append(obj)
     library = subprocess.check_output([*flags, '-shared', '-static-libstdc++', '-Wl,--no-undefined',
                                        '-Wl,-soname,libAsterRgbaPilot.so', *objects, '-o', '-'])
-    return (dex / 'classes.dex').read_bytes(), library
+    return dex, library
 
 
 def baseline_sizes(source, base):

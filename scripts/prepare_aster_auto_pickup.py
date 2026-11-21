@@ -14,7 +14,8 @@ from prepare_profile_memory import branch
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def patch_native(native, ndk, output, *, world_resources=False, mount_campaign=False, guard_chooser_resume=False):
+def patch_native(native, ndk, output, *, world_resources=False, mount_campaign=False,
+                 guard_chooser_resume=False, offline_sign_in=False):
     output.mkdir(parents=True, exist_ok=True)
     elf = ELFFile(BytesIO(native))
     loads = [(i, s) for i, s in enumerate(elf.iter_segments()) if s["p_type"] == "PT_LOAD"]
@@ -32,10 +33,17 @@ def patch_native(native, ndk, output, *, world_resources=False, mount_campaign=F
     obj, linked, ld = (output / ("auto-pickup." + suffix) for suffix in ("o", "elf", "ld"))
     subprocess.run([tools / "clang++.exe", *flags, "-c", ROOT / "src/auto-pickup/auto_pickup.cpp",
                     "-o", obj], check=True)
-    with obj.open("rb") as handle:
-        for section in ELFFile(handle).iter_sections():
-            if section["sh_type"] == "SHT_REL" and "exidx" not in section.name:
-                assert all(r["r_info_type"] != 2 for r in section.iter_relocations()), section.name
+    objects = [obj]
+    if offline_sign_in:
+        sign = output / "daily-sign-in.o"
+        subprocess.run([tools / "clang++.exe", *flags, "-c", ROOT / "src/daily-sign-in/daily_sign_in.cpp",
+                        "-o", sign], check=True)
+        objects.append(sign)
+    for item in objects:
+        with item.open("rb") as handle:
+            for section in ELFFile(handle).iter_sections():
+                if section["sh_type"] == "SHT_REL" and "exidx" not in section.name:
+                    assert all(r["r_info_type"] != 2 for r in section.iter_relocations()), section.name
     ld.write_text(f"""ENTRY(asterPickupUpdate)
 SECTIONS {{
     . = {text_start}; .payload : {{ *(.text*) *(.rodata*) }}
@@ -43,7 +51,7 @@ SECTIONS {{
     /DISCARD/ : {{ *(.ARM.exidx*) *(.ARM.extab*) *(.comment*) *(.note*) }}
 }}""", encoding="ascii")
     subprocess.run([tools / "clang++.exe", *flags, "-nostdlib", "-static", "-no-pie",
-                    "-Wl,--no-undefined", "-Wl,-T," + str(ld), obj, "-o", linked], check=True)
+                    "-Wl,--no-undefined", "-Wl,-T," + str(ld), *objects, "-o", linked], check=True)
     with linked.open("rb") as handle:
         helper = ELFFile(handle)
         body, variables = (helper.get_section_by_name(n) for n in (".payload", ".runtime"))
@@ -205,6 +213,73 @@ SECTIONS {{
             pop {{r0-r4,lr}}
             ldrb r3,[r4,#0x988]
             b #0x2261e8
+        """)
+
+    if offline_sign_in:
+        # The native widget has already checked pointer release and played its click sound.
+        wrap(0xa1c920, 0xe3a01003, f"""
+            {get_base}
+            bl #{symbols["asterDailySignOpen"]}
+            b #0xa1c8c0
+        """)
+        sign_config_sites = {
+            0x418504: "asterDailySignOpeningConfig",
+            0xf655c8: "asterDailySignConfig",
+            0xf64c4c: "asterDailySignConfig",
+            0xf68f38: "asterDailySignConfig",
+        }
+        for site, symbol in sign_config_sites.items():
+            expected = struct.unpack("<I", branch(site, 0x41545c, True))[0]
+            wrap(site, expected, f"""
+                {get_base}
+                b #{symbols[symbol]}
+            """, True)
+        wrap(0x418518, 0xeb28d4b5, """
+            cmp r0,#0
+            movne r0,#1
+            bx lr
+        """, True)
+        # Only this calendar uses local civil time. The server clock stays untouched.
+        wrap(0xf64e24, 0xeb0041a0, """
+            mov r0,#0
+            bl #0x147824
+            b #0xf64e2c
+        """)
+        wrap(0xf64e78, 0xebd2c177, "b #0xf64f1c")
+        # Earlier dates might have been skipped. Only today uses the claim flag.
+        wrap(0xf64c00, 0xe3a03000, "mov r3,#0\nb #0xf64d34")
+        wrap(0xf64c64, 0xebfffa04, f"""
+            mov r2,r1
+            mov r1,r0
+            {get_base}
+            b #{symbols["asterDailySignTile"]}
+        """, True)
+        wrap(0xf629bc, 0xeb113243, f"""
+            push {{r0-r4,lr}}
+            mov r1,sp
+            add r2,sp,#24
+            {get_base}
+            bl #{symbols["asterDailySignDraw"]}
+            add sp,sp,#20
+            pop {{pc}}
+        """, True)
+        # The old sequential-login footer would show the date as a login count.
+        wrap(0xf6236c, 0xeb081c55, "bx lr", True)
+        wrap(0xf624bc, 0xebe8436b, "bx lr", True)
+        # Today's text conveys claim status without an animation over the amounts.
+        wrap(0xf629e0, 0xebe66215, "bx lr", True)
+        wrap(0xf629f4, 0xebe66210, "bx lr", True)
+        wrap(0xf62cfc, 0xeb0819f1, "bx lr", True)
+        wrap(0xf68f58, 0xebffe784, f"""
+            push {{r0-r4,lr}}
+            mov r1,r4
+            mov r2,r6
+            {get_base}
+            bl #{symbols["asterDailySignCommit"]}
+            cmp r0,#0
+            pop {{r0-r4,lr}}
+            beq #0xf69068
+            b #0xf68f5c
         """)
 
     old_rw = state["p_offset"]

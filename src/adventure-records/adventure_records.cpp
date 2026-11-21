@@ -6,7 +6,7 @@ using AdventureRecords::Plant;
 using AdventureRecords::Record;
 using AdventureRecords::Stopwatch;
 
-template<class T> static T field(Object object, Word offset) {
+template<class T> static T& field(Object object, Word offset) {
     return *reinterpret_cast<T*>(object + offset);
 }
 
@@ -59,6 +59,29 @@ static bool playing(Object board) {
         && !field<unsigned char>(board, 0x8d5) && !field<unsigned char>(board, 0x7fd);
 }
 
+static Object observedBattleBoard;
+static float observedBattleStart;
+
+static void restoreEgyptEndlessPlantUpdates(Word base, Object board) {
+    if (!board || !playing(board)) return;
+    const float start = field<float>(board, 0xcc);
+    if (observedBattleBoard == board && observedBattleStart == start) return;
+    if (gameBoard(base) != board) return;
+    observedBattleBoard = board;
+    observedBattleStart = start;
+
+    constexpr char level[] = "egypt_dangerroom";
+    const char* alias = field<const char*>(board, 0xc4);
+    if (!alias) return;
+    for (char ch : level) {
+        if (*alias++ != ch) return;
+    }
+    // The legacy floor intro suspends plant actions. Its restored seed chooser
+    // enters battle without re-enabling the plant action state machine.
+    constexpr Word plantActionsEnabled = 0x7fb;
+    field<unsigned char>(board, plantActionsEnabled) = 1;
+}
+
 static bool sameRun(Word base, Object board) {
     return board && current.board == board && gameBoard(base) == board &&
         owner(ownerStore(base)) == current.owner &&
@@ -109,6 +132,8 @@ extern "C" void asterAdventureStart(Word base, Object board) {
     native<int>(base, 0x148424, commandPath);
     native<int>(base, 0x148424, claimedPath);
 #endif
+    if (observedBattleBoard == board) observedBattleBoard = nullptr;
+    restoreEgyptEndlessPlantUpdates(base, board);
     if (!board || board != gameBoard(base) || !playing(board)) return;
     Word day = AdventureRecords::egyptDay(field<const char*>(board, 0xc4));
     if (!day || field<Word>(board, 0xb4) != 9 || field<Word>(board, 0xb8) != 5) return;
@@ -133,6 +158,8 @@ extern "C" void asterAdventureStart(Word base, Object board) {
 }
 
 extern "C" void asterAdventureTick(Word base, Object board) {
+    // A saved battle can restore directly to the live phase.
+    restoreEgyptEndlessPlantUpdates(base, board);
     if (current.board != board || !current.board) return;
     if (!sameRun(base, board)) {
         current.board = nullptr;
@@ -186,24 +213,28 @@ static bool readBest(Word base, Word ownerId, Word day, Word stars, Record& out,
     return size == sizeof(Record) && extra == 0 && AdventureRecords::valid(out, ownerId, day, stars);
 }
 
-static bool writeBest(Word base, const Record& record, bool assisted) {
-    char path[128], temp[128];
-    recordPath(path, record.owner, record.day, record.stars, false, assisted);
-    recordPath(temp, record.owner, record.day, record.stars, true, assisted);
+static bool writeBytes(Word base, const void* data, Word length, const char* path, const char* temp) {
     int fd = native<int>(base, 0x148448, temp, 0x241, 0600);
     if (fd < 0) return false;
-    auto* bytes = reinterpret_cast<const unsigned char*>(&record);
+    auto* bytes = reinterpret_cast<const unsigned char*>(data);
     Word size = 0;
-    while (size < sizeof(Record)) {
-        int n = native<int>(base, 0x1485d4, fd, bytes + size, sizeof(Record) - size);
+    while (size < length) {
+        int n = native<int>(base, 0x1485d4, fd, bytes + size, length - size);
         if (n <= 0) break;
         size += unsigned(n);
     }
-    bool synced = size == sizeof(Record) && native<int>(base, 0x1485e0, fd) == 0;
+    bool synced = size == length && native<int>(base, 0x1485e0, fd) == 0;
     bool closed = native<int>(base, 0x147b90, fd) == 0;
     bool saved = synced && closed && native<int>(base, 0x147e6c, temp, path) == 0;
     if (!saved) native<int>(base, 0x148424, temp);
     return saved;
+}
+
+static bool writeBest(Word base, const Record& record, bool assisted) {
+    char path[128], temp[128];
+    recordPath(path, record.owner, record.day, record.stars, false, assisted);
+    recordPath(temp, record.owner, record.day, record.stars, true, assisted);
+    return writeBytes(base, &record, sizeof(Record), path, temp);
 }
 
 struct WeakRef {
@@ -216,9 +247,9 @@ static bool capturePlant(Word base, Object registry, Object object, Plant& out) 
         || field<unsigned char>(object, 0x1c9)) return false;
     Word column = field<Word>(object, 0xb0);
     Word row = field<Word>(object, 0xac);
-    const int levelOverride = field<int>(object, 0x1c0);
-    // Ordinary planted cards use m_iMiniLevel. m_iLevel is normally -1.
-    Word level = levelOverride > 0 ? Word(levelOverride) : field<Word>(object, 0x170);
+    // The normal Plant level setter writes +0x38. The mini-mode and
+    // override levels are separate fields.
+    Word level = field<Word>(object, 0x38);
     if (column >= 9 || row >= 5 || level < 1 || level > 4) return false;
     Object type = native<Object>(base, 0x1da034, registry,
         reinterpret_cast<const WeakRef*>(object + 0xf8));
@@ -294,6 +325,10 @@ extern "C" bool asterAdventureBest(Word base, Word day, Word stars, Record* out)
     return out && id != ~0U && day >= 1 && day <= 2 && stars <= 3
         && readBest(base, id, day, stars, *out);
 }
+
+#ifdef ASTER_SOCIAL_LEVELS
+#include "social_levels.h"
+#endif
 
 struct Color {
     int red, green, blue, alpha;

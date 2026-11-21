@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "friends": [
+    {
+      "id": 1,
+      "name": "离线示例好友",
+      "runs": [
+        {
+          "day": 1,
+          "stars": 0,
+          "elapsedMs": 142300,
+          "plants": [
+            {"type": "sunflower", "column": 1, "row": 1, "level": 1},
+            {"type": "sunflower", "column": 1, "row": 3, "level": 2},
+            {"type": "peashooter", "column": 3, "row": 1, "level": 2},
+            {"type": "peashooter", "column": 3, "row": 3, "level": 3},
+            {"type": "wallnut", "column": 6, "row": 1, "level": 1},
+            {"type": "wallnut", "column": 6, "row": 3, "level": 2}
+          ]
+        },
+        {
+          "day": 2,
+          "stars": 0,
+          "elapsedMs": 167800,
+          "plants": [
+            {"type": "sunflower", "column": 1, "row": 2, "level": 1},
+            {"type": "cabbagepult", "column": 3, "row": 2, "level": 2},
+            {"type": "peashooter", "column": 3, "row": 4, "level": 3},
+            {"type": "wallnut", "column": 5, "row": 2, "level": 2}
+          ]
+        }
+      ]
+    }
+  ]
+}

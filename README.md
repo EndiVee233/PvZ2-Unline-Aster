@@ -4,6 +4,10 @@
 
 当前正式版为 **A236**。ARM32 已通过 WSA 用户验收。**不推荐 ARM64，优先使用 ARM32。** ARM64 为未运行验收的实验包。 [下载最新正式版](https://github.com/EndiVee233/PvZ2-Unline-Aster/releases/latest) · [A236 构建与验证](docs/recovery/aster-A236-release.md)
 
+## A272 预发布
+
+埃及第 1、2 天已支持星级自选、离线好友排行榜和棋盘阵型预览。A272 接入了三星罐头解锁，修复了跳档挑战时的星星显示及埃及旧无尽续层的植物停摆。**不推荐 ARM64，优先使用 ARM32。** [下载 A272](https://github.com/EndiVee233/PvZ2-Unline-Aster/releases/tag/A272) · [变更与验收](docs/A272-prerelease.md)
+
 ## Unline系列
 - PvZ2:Aster
 - [PvZ2:Iris](https://github.com/EndiVee233/PvZ2-Unline-Iris)

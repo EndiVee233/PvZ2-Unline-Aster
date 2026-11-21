@@ -2,7 +2,9 @@
 
 import argparse
 from io import BytesIO
+import os
 from pathlib import Path
+import re
 import struct
 import subprocess
 from zipfile import ZipFile
@@ -27,6 +29,22 @@ WIN = 0x227E9C
 DRAW_CALL = 0x23AA00
 DRAW = 0x1A30020
 KILL_ZOMBIES = 0x85D8D8
+MAP_LEVEL_CALLS = (0x9DF1C8, 0x9E4704, 0x9E857C)
+LAUNCH_LEVEL = 0x354360
+BOARD_LOAD_CALL, BOARD_LOAD = 0x350570, 0x1A2AF70
+BOARD_READY_CALL, BOARD_UPDATE_DONE = 0x2297EC, 0x229520
+STAR_CHOICE, STAR_CHOSEN = 0x225FF4, 0x2260A8
+STAR_MODULE_GATE, STAR_MODULE_LOCKED, STAR_MODULE_ENABLED = 0x90221C, 0x902348, 0x902244
+STAR_RESULT_TITLE = 0x7E5568
+STAR_RIBBON_ART, STAR_RIBBON_EMPTY, STAR_RIBBON_GOLD = 0x805DB0, 0x805FB0, 0x805FF8
+LEVEL_MENU_DRAW, POP_GRAPHICS = 0x7F3934, 0x116D764
+LEVEL_MENU_PANEL_CALL, DRAW_DIALOG_PANEL = 0x7F3B38, 0x7F3470
+BEGIN_BATTLE_ENTRY, BEGIN_BATTLE_TARGET = 0x2261A8, 0x17813A4
+GAME_POLL, GAME_POLL_TARGET = 0x1A15808, 0x1A4995C
+START_BUTTON_EVENT, DISPATCH_EVENT = 0x926D08, 0x21DF78
+BOARD_TOUCH_CALLS, BOARD_TOUCH = (0x1A30114, 0x1A3013C, 0x1A30164), 0x1A2E16C
+TITLE_TEXT, TRANSLATE_TEXT = 0x205544, 0xD07BB4
+BOARD_MESSAGE_DRAW, BOARD_MESSAGE_TARGET = 0x46D890, 0x1A30074
 FLAGS = [
     "--target=armv7a-linux-androideabi24", "-marm", "-march=armv7-a",
     "-mfloat-abi=softfp", "-mfpu=vfpv3-d16", "-Os", "-std=c++17",
@@ -36,10 +54,12 @@ FLAGS = [
 ]
 
 
-def payload(ndk, output, address, state_address, battle_tools):
+def payload(ndk, output, address, state_address, battle_tools, social_levels):
     clang = ndk / "toolchains/llvm/prebuilt/windows-x86_64/bin/clang++.exe"
     obj, linked, layout = (output / f"adventure-records.{ext}" for ext in ("o", "elf", "ld"))
     defines = ["-DASTER_WSA_BATTLE_TOOLS"] if battle_tools else []
+    if social_levels:
+        defines.append("-DASTER_SOCIAL_LEVELS")
     subprocess.run([clang, *FLAGS, *defines, "-c", ROOT / "src/adventure-records/adventure_records.cpp",
                     "-o", obj], check=True)
     layout.write_text(f"""ENTRY(asterAdventureStart)
@@ -64,7 +84,7 @@ SECTIONS {{
         return bytearray(code.data()), state["sh_size"], symbols
 
 
-def patch_native(native, ndk, output, battle_tools=False):
+def patch_native(native, ndk, output, battle_tools=False, social_levels=False):
     elf = ELFFile(BytesIO(native))
     loads = [(i, seg) for i, seg in enumerate(elf.iter_segments()) if seg["p_type"] == "PT_LOAD"]
     (code_index, code), (state_index, state) = loads[-2:]
@@ -78,7 +98,7 @@ def patch_native(native, ndk, output, battle_tools=False):
         kill = file_offset(elf, KILL_ZOMBIES)
         if struct.unpack_from("<4I", native, kill) != (0xE92D4FF0, 0xE59F5164, 0xE28DB020, 0xE24DD05C):
             raise ValueError("A250 native zombie-clearing routine changed")
-    body, state_size, symbols = payload(ndk, output, address, state_address, battle_tools)
+    body, state_size, symbols = payload(ndk, output, address, state_address, battle_tools, social_levels)
     assembler = Ks(KS_ARCH_ARM, KS_MODE_ARM)
 
     def stub(source):
@@ -107,7 +127,17 @@ def patch_native(native, ndk, output, battle_tools=False):
         pop {{r0-r3,ip,lr}}
         pop {{r4,pc}}
     """)
-    tick = stub(f"""push {{r0-r3,ip,lr}}
+    def guard(name):
+        return f"""push {{r0-r3,ip,lr}}
+        {helper(name, "r0")}
+        cmp r0,#0
+        pop {{r0-r3,ip,lr}}
+        bxne lr
+    """
+
+    view_tick = guard("asterAdventureUpdateView") if social_levels else ""
+    tick = stub(f"""{view_tick}
+        push {{r0-r3,ip,lr}}
         {helper("asterAdventureTick", "r0")}
         pop {{r0-r3,ip,lr}}
         .word {UPDATE_PROLOGUE}
@@ -129,12 +159,138 @@ def patch_native(native, ndk, output, battle_tools=False):
         {helper("asterAdventureDrawClock", "r4")}
         pop {{r4-r6,pc}}
     """)
-    changes = (
+    changes = [
         (START_CALL, branch(START_CALL, SET_PHASE, True), branch(START_CALL, begin, True)),
         (UPDATE, struct.pack("<I", UPDATE_PROLOGUE), branch(UPDATE, tick)),
         (WIN_CALL, branch(WIN_CALL, WIN, True), branch(WIN_CALL, win, True)),
         (DRAW_CALL, branch(DRAW_CALL, DRAW, True), branch(DRAW_CALL, draw, True)),
-    )
+    ]
+    if social_levels:
+        choose = stub(f"""push {{r4-r7,lr}}
+            sub sp,sp,#12
+            str r3,[sp]
+            ldr r4,[sp,#32]
+            ldr r5,[sp,#36]
+            str r4,[sp,#4]
+            str r5,[sp,#8]
+            mov r3,r2
+            mov r2,r1
+            {helper("asterAdventureChoose", "r0")}
+            add sp,sp,#12
+            pop {{r4-r7,pc}}
+        """)
+        load = stub(f"""push {{r4,lr}}
+            mov r4,r0
+            bl #{BOARD_LOAD}
+            push {{r0-r3,ip,lr}}
+            {helper("asterAdventureViewLoaded", "r4")}
+            pop {{r0-r3,ip,lr}}
+            pop {{r4,pc}}
+        """)
+        poll = stub(f"""push {{r0-r3,ip,lr}}
+            {helper("asterAdventureSocialFrame", "r0")}
+            pop {{r0-r3,ip,lr}}
+            b #{GAME_POLL_TARGET}
+        """)
+        ready = stub(f"""push {{r0-r3,ip,lr}}
+            mov r2,r1
+            {helper("asterAdventureEnterView", "r0")}
+            cmp r0,#0
+            pop {{r0-r3,ip,lr}}
+            bne #{BOARD_UPDATE_DONE}
+            b #{SET_PHASE}
+        """)
+        no_battle = stub(f"""{guard("asterAdventureViewFrozen")}
+            b #{BEGIN_BATTLE_TARGET}
+        """)
+        view_button = stub(f"""push {{r0-r3,ip,lr}}
+            mov r3,r5
+            mov r2,r1
+            {helper("asterAdventureViewButton", "r0")}
+            pop {{r0-r3,ip,pc}}
+        """)
+        title_text = stub(f"""push {{r0-r3,ip,lr}}
+            mov r3,sl
+            mov r2,r1
+            {helper("asterAdventureTranslateTitle", "r0")}
+            pop {{r0-r3,ip,pc}}
+        """)
+        board_message = stub(f"""{guard("asterAdventureSuppressMessages")}
+            b #{BOARD_MESSAGE_TARGET}
+        """)
+        initial_star = stub(f"""push {{r0-r3,ip,lr}}
+            mov r2,r0
+            {helper("asterAdventureSelectChallenge", "r8")}
+            cmp r0,#0
+            pop {{r0-r3,ip,lr}}
+            bne #{STAR_CHOSEN}
+            mov r5,r0
+            b #{STAR_CHOICE + 4}
+        """)
+        # Explicit menu selections have already passed the menu's unlock gate.
+        # Retain the stock main-level and world gates for all other launches.
+        star_module = stub(f"""push {{r0-r3,ip,lr}}
+            {helper("asterAdventureSelectedStarModule", "r0")}
+            cmp r0,#0
+            pop {{r0-r3,ip,lr}}
+            bne #{STAR_MODULE_ENABLED}
+            cmp r0,#0
+            beq #{STAR_MODULE_LOCKED}
+            b #{STAR_MODULE_GATE + 4}
+        """)
+        star_title = stub(f"""push {{r0-r3,ip,lr}}
+            {helper("asterAdventureAllStarsTitle", "r5")}
+            cmp r0,#1
+            pop {{r0-r3,ip,lr}}
+            b #{STAR_RESULT_TITLE + 4}
+        """)
+        star_ribbon = stub(f"""push {{r0-r3,ip,lr}}
+            mov r2,r8
+            {helper("asterAdventureOtherStarArt", "r6")}
+            cmp r0,#0
+            pop {{r0-r3,ip,lr}}
+            beq #{STAR_RIBBON_EMPTY}
+            bgt #{STAR_RIBBON_GOLD}
+            ldr r3,[r6,#0xa4]
+            b #{STAR_RIBBON_ART + 4}
+        """)
+        menu_draw = stub(f"""push {{r0-r3,ip,lr}}
+            mov r2,r7
+            {helper("asterAdventureDrawMenu", "r6")}
+            pop {{r0-r3,ip,lr}}
+            b #{POP_GRAPHICS}
+        """)
+        panel_draw = stub(f"""push {{r0-r3,ip,lr}}
+            mov r3,r2
+            mov r2,r1
+            {helper("asterAdventureDrawMenuPanel", "r0")}
+            pop {{r0-r3,ip,pc}}
+        """)
+        for site in MAP_LEVEL_CALLS:
+            changes.append((site, branch(site, LAUNCH_LEVEL, True), branch(site, choose, True)))
+        for site in BOARD_TOUCH_CALLS:
+            changes.append((site, branch(site, BOARD_TOUCH, True),
+                            branch(site, symbols["asterAdventureViewTouch"], True)))
+        changes.extend((
+            (BOARD_LOAD_CALL, branch(BOARD_LOAD_CALL, BOARD_LOAD, True), branch(BOARD_LOAD_CALL, load, True)),
+            (BOARD_READY_CALL, branch(BOARD_READY_CALL, SET_PHASE, True), branch(BOARD_READY_CALL, ready, True)),
+            (BEGIN_BATTLE_ENTRY, branch(BEGIN_BATTLE_ENTRY, BEGIN_BATTLE_TARGET),
+             branch(BEGIN_BATTLE_ENTRY, no_battle)),
+            (START_BUTTON_EVENT, branch(START_BUTTON_EVENT, DISPATCH_EVENT, True),
+             branch(START_BUTTON_EVENT, view_button, True)),
+            (TITLE_TEXT, branch(TITLE_TEXT, TRANSLATE_TEXT, True), branch(TITLE_TEXT, title_text, True)),
+            (BOARD_MESSAGE_DRAW, branch(BOARD_MESSAGE_DRAW, BOARD_MESSAGE_TARGET),
+             branch(BOARD_MESSAGE_DRAW, board_message)),
+            (STAR_CHOICE, struct.pack("<I", 0xE1A05000), branch(STAR_CHOICE, initial_star)),
+            (STAR_MODULE_GATE, struct.pack("<I", 0x0A000049), branch(STAR_MODULE_GATE, star_module)),
+            (STAR_RESULT_TITLE, struct.pack("<I", 0xE3530002), branch(STAR_RESULT_TITLE, star_title)),
+            (STAR_RIBBON_ART, struct.pack("<I", 0xE59630A4), branch(STAR_RIBBON_ART, star_ribbon)),
+            (LEVEL_MENU_DRAW, branch(LEVEL_MENU_DRAW, POP_GRAPHICS, True),
+             branch(LEVEL_MENU_DRAW, menu_draw, True)),
+            (LEVEL_MENU_PANEL_CALL, branch(LEVEL_MENU_PANEL_CALL, DRAW_DIALOG_PANEL, True),
+             branch(LEVEL_MENU_PANEL_CALL, panel_draw, True)),
+            (GAME_POLL, branch(GAME_POLL, GAME_POLL_TARGET), branch(GAME_POLL, poll)),
+        ))
     result = bytearray(native)
     for site, expected, replacement in changes:
         pos = file_offset(elf, site)
@@ -168,7 +324,50 @@ def patch_native(native, ndk, output, battle_tools=False):
     return bytes(result)
 
 
-def build(base, output, sdk, ndk, signing=None, wsa_test=False, wsa_battle_tools=False):
+def social_dex(output, sdk):
+    output.mkdir(exist_ok=True)
+    android = sdk / "platforms/android-34/android.jar"
+    package = ROOT / "src/bootstrap-extra/com/popcap/pvz2cthd"
+    sources = [package / (name + ".java") for name in ("AdventureFormationRecord", "AdventureSocial")]
+    classes = output / "classes"
+    classes.mkdir(exist_ok=True)
+    subprocess.run(["javac", "-encoding", "UTF-8", "-source", "8", "-target", "8",
+                    "-classpath", android, "-sourcepath", ROOT / "src/bootstrap-extra",
+                    "-implicit:none", "-d", classes, *sources], check=True)
+    jar = output / "social.jar"
+    with ZipFile(jar, "w") as archive:
+        for name in ("AdventureFormationRecord", "AdventureSocial"):
+            for item in sorted((classes / "com/popcap/pvz2cthd").glob(name + "*.class")):
+                archive.write(item, item.relative_to(classes).as_posix())
+    subprocess.run(["java", "-Xmx384m", "-cp", sdk / "build-tools/34.0.0/lib/d8.jar",
+                    "com.android.tools.r8.D8", "--min-api", "24", "--lib", android,
+                    "--output", output, jar], check=True)
+    return (output / "classes.dex").read_bytes()
+
+
+def hook_social_frame(original, output):
+    output.mkdir(exist_ok=True)
+    apktool = ROOT.parent / "tools/apktool.jar"
+    subprocess.run(["javac", "-cp", apktool, "-d", output, ROOT / "scripts/RepairDex.java"], check=True)
+    cli = ["java", "-Xmx384m", "-cp", str(apktool) + os.pathsep + str(output), "RepairDex"]
+    original_dex = output / "input.dex"
+    original_dex.write_bytes(original)
+    smali = output / "smali"
+    subprocess.run([*cli, "decode", original_dex, smali], check=True)
+    renderer = smali / "com/popcap/SexyAppFramework/AndroidSurfaceView$AndroidRenderer.smali"
+    text = renderer.read_text(encoding="utf-8")
+    entry = "    invoke-static {}, Lcom/popcap/pvz2cthd/PresetEditor;->frame()V"
+    if text.count(entry) != 1:
+        raise ValueError("Missing existing game renderer frame callback")
+    hook = "    invoke-static {}, Lcom/popcap/pvz2cthd/AdventureSocial;->frame()V"
+    renderer.write_text(text.replace(entry, entry + "\n\n" + hook), encoding="utf-8")
+    rebuilt = output / "renderer.dex"
+    subprocess.run([*cli, "encode", smali, rebuilt], check=True)
+    return rebuilt.read_bytes()
+
+
+def build(base, output, sdk, ndk, signing=None, wsa_test=False, wsa_battle_tools=False,
+          social_levels=False):
     if wsa_battle_tools and not wsa_test:
         raise ValueError("Battle tools are available only in a WSA test build")
     output.mkdir(parents=True, exist_ok=True)
@@ -177,25 +376,35 @@ def build(base, output, sdk, ndk, signing=None, wsa_test=False, wsa_battle_tools
         original = arm32.read(ARM_ENGINES["ARM32"])
         if original != arm64.read(ARM_ENGINES["ARM64"]):
             raise ValueError("A250 engines must share the same ARM32 code")
-    patched = patch_native(original, ndk, output, wsa_battle_tools)
+    patched = patch_native(original, ndk, output, wsa_battle_tools, social_levels)
     (output / "libSrc-adventure-records.so").write_bytes(patched)
     if not signing:
         return
+    version = 272 if social_levels else 251
+    companion_dex = social_dex(output / "social-dex", sdk) if social_levels else None
     architectures = ("ARM32",) if wsa_test else ARM_ENGINES
     for abi in architectures:
         member = ARM_ENGINES[abi]
         with ZipFile(sources[abi]) as apk:
-            manifest = manifest_version(apk.read("AndroidManifest.xml"), 251, 250, prefix="A")
+            manifest = manifest_version(apk.read("AndroidManifest.xml"), version, 250, prefix="A")
             excluded = ([name for name in apk.namelist() if name.startswith("assets/pvz2data.zip.")]
                         if wsa_test else [])
+            changes = {member: patched, "AndroidManifest.xml": manifest}
+            extra_entries = {}
+            if companion_dex is not None:
+                changes["classes.dex"] = hook_social_frame(apk.read("classes.dex"), output / f"renderer-{abi}")
+                last_dex = max(int(match[1] or "1") for name in apk.namelist()
+                               if (match := re.fullmatch(r"classes(\d*)\.dex", name)))
+                friends = ROOT / "src/adventure-records/friends.json"
+                extra_entries = {f"classes{last_dex + 1}.dex": companion_dex,
+                                 "assets/adventure/friends.json": friends.read_bytes()}
         if wsa_test and len(excluded) != 3:
             raise ValueError("The WSA candidate expects three already extracted resource parts")
         label = f"{abi}-WSA-existing-data" if wsa_test else abi
         if wsa_battle_tools:
             label += "-battle-tools"
-        target = output / f"PvZ2-Unline-Aster-A251-{label}.apk"
-        pack_apk(sources[abi], {member: patched, "AndroidManifest.xml": manifest}, sdk, target,
-                 signing, excluded=excluded)
+        target = output / f"PvZ2-Unline-Aster-A{version}-{label}.apk"
+        pack_apk(sources[abi], changes, sdk, target, signing, extra_entries=extra_entries, excluded=excluded)
         print(target, flush=True)
 
 
@@ -206,4 +415,5 @@ if __name__ == "__main__":
     parser.add_argument("--signing", type=Path)
     parser.add_argument("--wsa-test", action="store_true")
     parser.add_argument("--wsa-battle-tools", action="store_true")
+    parser.add_argument("--social-levels", action="store_true")
     build(**vars(parser.parse_args()))

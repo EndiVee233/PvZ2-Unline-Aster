@@ -13,6 +13,7 @@
 #include <pthread.h>
 #include <sys/stat.h>
 #include <time.h>
+#include <errno.h>
 #ifdef PVZ2_DECODE_DIAGNOSTICS
 #include <signal.h>
 #include <ucontext.h>
@@ -35,6 +36,7 @@ static void decode_fault(int signal, siginfo_t *info, void *context) {
 #endif
 #include <GLES2/gl2.h>
 #include <astc-codec/astc-codec.h>
+#include "aster_wsa.h"
 
 #define TAG "GLShim"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
@@ -55,6 +57,7 @@ typedef void (*PFN_glCompressedTexImage2D)(GLenum, GLint, GLenum, GLsizei, GLsiz
 static PFN_glTexImage2D real_tex = nullptr;
 static PFN_glTexSubImage2D real_sub = nullptr;
 static PFN_glCompressedTexImage2D real_ctex = nullptr;
+static bool use_wsa_decoder = false;
 typedef void (*PFN_etc1_decode)(const uint8_t *, uint8_t *, int, int);
 static PFN_etc1_decode etc1_decode = nullptr;
 static int tex_logs = 0;
@@ -136,6 +139,15 @@ static void patch_got(ModInfo &m, const char *symname, void *replacement) {
 extern "C" void glTexImage2D(GLenum target, GLint level, GLint internalformat, GLsizei width,
                              GLsizei height, GLint border, GLenum format, GLenum type,
                              const void *pixels) {
+    if (!use_wsa_decoder) {
+        // The engine sometimes uses the packed pixel *type* as its base
+        // internal format, including for a null allocation. GLES accepts
+        // the same RGBA4444 pixels unchanged when its base format is RGBA.
+        if (internalformat == GL_UNSIGNED_SHORT_4_4_4_4 && format == GL_RGBA && type == GL_UNSIGNED_SHORT_4_4_4_4)
+            internalformat = GL_RGBA;
+        if (real_tex) real_tex(target, level, internalformat, width, height, border, format, type, pixels);
+        return;
+    }
     if (tex_logs < 300) {
         tex_logs++;
         if (internalformat == 0x8033 || internalformat == 0x8045 ||
@@ -176,6 +188,10 @@ extern "C" void glTexImage2D(GLenum target, GLint level, GLint internalformat, G
 extern "C" void glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset,
                                 GLsizei width, GLsizei height, GLenum format, GLenum type,
                                 const void *pixels) {
+    if (!use_wsa_decoder) {
+        if (real_sub) real_sub(target, level, xoffset, yoffset, width, height, format, type, pixels);
+        return;
+    }
     if (format == GL_RGBA && type == 0x8033 && pixels && width > 0 && height > 0) {
         size_t n = (size_t)width * (size_t)height;
         uint8_t *out = (uint8_t *)malloc(n * 4);
@@ -287,6 +303,14 @@ static uint64_t astc_hash(const uint8_t *p, size_t n, int w, int h, int fmt, int
     return x;
 }
 
+// The ARM64 bridge replaces these relocated pointers after comparing results
+// with the guest implementations. Keep both callable on native 32-bit ARM.
+extern "C" {
+__attribute__((visibility("default"))) decltype(&astc_hash) volatile aster_glshim_hash = astc_hash;
+__attribute__((visibility("default"))) decltype(&astc_codec::ASTCDecompressToRGBA) volatile
+    aster_glshim_decode = astc_codec::ASTCDecompressToRGBA;
+}
+
 static void ensure_astc_cache_dir() {
     mkdir(PVZ2_GL_CACHE_ROOT, 0770);
     mkdir(PVZ2_GL_CACHE_ROOT "/glcache", 0770);
@@ -324,10 +348,17 @@ static uint8_t *cache_read_rgba(const char *path, int *w, int *h) {
 
 static void cache_write_rgba(const char *path, int w, int h, const std::vector<AstcStrip> &strips) {
     static std::atomic<unsigned> sequence{0};
+    static std::atomic<unsigned> failures{0};
+    // Android/file managers may remove cache while background workers live.
+    // Recreate the generated directories before each atomic publication.
+    ensure_astc_cache_dir();
     char temporary[320];
     snprintf(temporary,sizeof(temporary),"%s.tmp.%d.%u",path,getpid(),sequence.fetch_add(1));
     FILE *f = fopen(temporary, "wb");
-    if (!f) return;
+    if (!f) {
+        if(failures.fetch_add(1)<8)LOGI("ASTC cache write failed errno=%d path=%s",errno,path);
+        return;
+    }
     uint32_t hdr[2] = {(uint32_t)w, (uint32_t)h};
     bool ok = fwrite(hdr, sizeof(uint32_t), 2, f) == 2;
     for (size_t i = 0; i < strips.size(); i++) {
@@ -340,7 +371,10 @@ static void cache_write_rgba(const char *path, int w, int h, const std::vector<A
         } else ok=false;
     }
     if (fclose(f) != 0) ok=false;
-    if (!ok || rename(temporary,path) != 0) unlink(temporary);
+    if (!ok || rename(temporary,path) != 0) {
+        int error=errno;unlink(temporary);
+        if(failures.fetch_add(1)<8)LOGI("ASTC cache publish failed errno=%d path=%s",error,path);
+    }
 }
 
 #include "decode_pool.inc"
@@ -353,7 +387,7 @@ static void decode_one_strip(AstcStripCtx *ctx, size_t i) {
 #endif
     size_t outsz = (size_t)ctx->width * s.h * 4;
     s.out = (uint8_t *)malloc(outsz);
-    s.ok = s.out && astc_codec::ASTCDecompressToRGBA(
+    s.ok = s.out && aster_glshim_decode(
         ctx->data+s.off,s.size,ctx->width,s.h,ctx->fp,s.out,outsz,(size_t)ctx->width*4);
 }
 
@@ -438,6 +472,10 @@ static bool astc_decode_parallel(const uint8_t *data, size_t imageSize,
 extern "C" void glCompressedTexImage2D(GLenum target, GLint level, GLenum internalformat,
                                        GLsizei width, GLsizei height, GLint border,
                                        GLsizei imageSize, const void *data) {
+    if (!use_wsa_decoder) {
+        if (real_ctex) real_ctex(target, level, internalformat, width, height, border, imageSize, data);
+        return;
+    }
     if (ctex_logs < 500) {
         ctex_logs++;
         LOGI("glCompressedTexImage2D internal=0x%x %dx%d size=%d border=%d",
@@ -480,7 +518,7 @@ extern "C" void glCompressedTexImage2D(GLenum target, GLint level, GLenum intern
             clock_gettime(CLOCK_MONOTONIC, &ts0);
             char cpath[256];
             cpath[0] = 0;
-            uint64_t hash = astc_hash((const uint8_t *)data, (size_t)imageSize,
+            uint64_t hash = aster_glshim_hash((const uint8_t *)data, (size_t)imageSize,
                                       width, height, (int)internalformat, imageSize);
             if (level == 0) {
                 ensure_astc_cache_dir();
@@ -548,18 +586,21 @@ __attribute__((constructor)) static void init_shim() {
     if (!real_sub) real_sub = (PFN_glTexSubImage2D)dlsym(gles, "glTexSubImage2D");
     real_ctex = (PFN_glCompressedTexImage2D)dlsym(RTLD_NEXT, "glCompressedTexImage2D");
     if (!real_ctex) real_ctex = (PFN_glCompressedTexImage2D)dlsym(gles, "glCompressedTexImage2D");
-    void *etc1 = dlopen("/system/lib/libETC1.so", RTLD_NOW | RTLD_GLOBAL);
-    if (!etc1) etc1 = dlopen("libETC1.so", RTLD_NOW | RTLD_GLOBAL);
-    if (etc1) etc1_decode = (PFN_etc1_decode)dlsym(etc1, "etc1_decode_image");
-    LOGI("init: real tex=%p sub=%p ctex=%p etc1h=%p etc1=%p err=%s",
-         real_tex, real_sub, real_ctex, etc1, etc1_decode, etc1 ? "" : dlerror());
-
+    use_wsa_decoder = aster_is_wsa();
+    LOGI("Texture path: %s", use_wsa_decoder ? "WSA compatibility decoder" : "native GLES");
     ModInfo mi;
     mi.name = "libSrc.so";
     dl_iterate_phdr(find_cb, &mi);
     if (!mi.base) { LOGI("libSrc not found"); return; }
     LOGI("libSrc base=%p", (void *)mi.base);
     patch_got(mi, "glTexImage2D", (void *)glTexImage2D);
+    if (!use_wsa_decoder) return;
+    void *etc1 = dlopen("/system/lib/libETC1.so", RTLD_NOW | RTLD_GLOBAL);
+    if (!etc1) etc1 = dlopen("libETC1.so", RTLD_NOW | RTLD_GLOBAL);
+    if (etc1) etc1_decode = (PFN_etc1_decode)dlsym(etc1, "etc1_decode_image");
+    LOGI("init: real tex=%p sub=%p ctex=%p etc1h=%p etc1=%p err=%s",
+         real_tex, real_sub, real_ctex, etc1, etc1_decode, etc1 ? "" : dlerror());
+
     patch_got(mi, "glTexSubImage2D", (void *)glTexSubImage2D);
     patch_got(mi, "glCompressedTexImage2D", (void *)glCompressedTexImage2D);
     start_texture_prefetch();

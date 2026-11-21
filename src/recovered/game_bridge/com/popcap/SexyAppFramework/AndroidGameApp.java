@@ -206,22 +206,11 @@ public class AndroidGameApp {
             Log.i("Game", "onActivityPause - Native_applicationDidEnterBackground");
         }
         Native_applicationDidEnterBackground();
-        if (this.mGLView.mbDrawingFrames) {
-            Object waitObj = new Object();
-            synchronized (waitObj) {
-                this.mGLView.mbNotifyOnDrawEventObject = waitObj;
-                try {
-                    waitObj.wait();
-                } catch (InterruptedException ex) {
-                    ex.printStackTrace();
-                }
-            }
-        }
+        AsterBackgroundFrames.awaitFrame(this.mGLView);
         if (DEBUG) {
             Log.i("Game", "onActivityPause - synchron wait obj over!!!!");
         }
         TryLoseFocus();
-        this.mGLView.mbDrawingFrames = false;
         if (SexyAppFrameworkActivity.IsEnablePNS()) {
             PopCapPushNotificationService.Instance().SetUserLastOpt(Info_SysGetPackageName());
         }

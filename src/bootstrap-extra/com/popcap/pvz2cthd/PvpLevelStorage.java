@@ -30,6 +30,7 @@ final class PvpLevelStorage {
     }
 
     File github() throws IOException { return directory(new File(root, "github")); }
+    File githubSpecial() throws IOException { return directory(new File(github(), "special-enemies")); }
 
     File[] localLevels() {
         File[] entries = root.listFiles(file -> file.isFile() && file.getName().endsWith(".json"));

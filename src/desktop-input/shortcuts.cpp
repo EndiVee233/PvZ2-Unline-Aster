@@ -4,6 +4,11 @@ template<class T> T &at(P p,U off){return *reinterpret_cast<T*>(p+off);}
 template<class R,class... A> R call(U base,U off,A... a){return reinterpret_cast<R(*)(A...)>(base+off)(a...);}
 template<class R,class... A> R virt(P p,U off,A... a){return reinterpret_cast<R(*)(P,A...)>(at<U>(reinterpret_cast<P>(at<U>(p,0)),off))(p,a...);}
 struct Touch {U id,pad;int x,y,px,py,taps,pad2;U time[2];U phase;};
+#ifdef DESKTOP_VIEW_ANGLE
+extern "C" void asterViewPoint(U b,P board,int* point);
+extern "C" void asterViewDesktopCursor(U b,P board,P cursor,int* point);
+extern "C" void asterViewTraceShortcut(U b,P board,U stage,P target);
+#endif
 struct Weak {U a,b;};
 static P resolve(U b,Weak *w){if(!(w->a|w->b))return nullptr;return call<P>(b,0x1da034,call<P>(b,0x11d74b4),w);}
 static void weak(U b,Weak *w,U a=0,U c=0){call<void>(b,0x1d9bb4,w,0,a,c);}
@@ -54,8 +59,14 @@ static bool click(U b,P app,P board,P p,Touch *source){
  // Feed the normal application touch entry, including widget routing, tutorial
  // locks, cooldown/resource checks and Board-local coordinate conversion.
  virt<void>(app,0x1c8,&t);
+#ifdef DESKTOP_VIEW_ANGLE
+ asterViewTraceShortcut(b,board,1,p);
+#endif
  t.x=pos[0];t.y=pos[1];t.px=t.x;t.py=t.y;t.phase=3;
  if(at<P>(app,0x6bc)==board)virt<void>(app,0x1cc,&t);
+#ifdef DESKTOP_VIEW_ANGLE
+ asterViewTraceShortcut(b,board,2,p);
+#endif
  return true;
 }
 #ifdef DESKTOP_EXTENDED_INPUT
@@ -113,8 +124,12 @@ static void plantfoodShortcut(U b,P driver,P app,P board,Touch *source){
  if(!(scale&0x7fffffff))return;
  // Match the native cursor's screen-to-lawn conversion and plant priority.
  U inverse=call<U>(b,0x15dee64,0x3f800000u,scale);
- int col=call<int>(b,0x24105c,scaled(b,t.x-at<int>(board,0x2c),inverse));
- int row=call<int>(b,0x2410b8,scaled(b,t.y-at<int>(board,0x30),inverse));
+ int point[2]={t.x-at<int>(board,0x2c),t.y-at<int>(board,0x30)};
+#ifdef DESKTOP_VIEW_ANGLE
+ asterViewPoint(b,board,point);
+#endif
+ int col=call<int>(b,0x24105c,scaled(b,point[0],inverse));
+ int row=call<int>(b,0x2410b8,scaled(b,point[1],inverse));
  if(U(col)>=9||U(row)>=5)return;
  P name=nullptr;char alloc=0;
  call<void>(b,0x14ed0e1,&name,"smallChestnut",&alloc);
@@ -141,6 +156,9 @@ static void collect(U b,P app,P board,Touch *source,bool all){
   if(obj&&at<P>(app,0x6bc)==board&&playable(board)&&!(at<U>(obj,0x8c)&0x80)&&at<U>(obj,0x94)!=1){
    Touch t;for(U i=0;i<sizeof(t)/4;++i)reinterpret_cast<U*>(&t)[i]=reinterpret_cast<U*>(source)[i];
    t.phase=1;
+#ifdef DESKTOP_VIEW_ANGLE
+   if(!all)asterViewPoint(b,board,&t.x);
+#endif
    if(all){P rect=virt<P>(obj,0x90);U scale=at<U>(app,0x690);
     t.x=scaled(b,at<int>(rect,0)+at<int>(rect,8)/2,scale);
     t.y=scaled(b,at<int>(rect,4)+at<int>(rect,12)/2,scale);
@@ -227,6 +245,10 @@ extern "C" __attribute__((section(".text.entry"))) void desktopInput(U b,P drive
   Touch t;for(U i=0;i<sizeof(t)/4;++i)reinterpret_cast<U*>(&t)[i]=reinterpret_cast<U*>(event)[i];
   t.x=event->px;t.y=event->py;call<void>(b,0x1327d0c,driver,&t);
   int pos[2]={t.x-at<int>(board,0x2c),t.y-at<int>(board,0x30)};
+#ifdef DESKTOP_VIEW_ANGLE
+  asterViewDesktopCursor(b,board,cursor,pos);
+#else
   call<void>(b,0x1efccc,cursor,pos);
+#endif
  }
 }

@@ -5,7 +5,8 @@ from pathlib import Path
 import struct
 from zipfile import ZipFile
 
-from aster_release_apk import manifest_version, pack_apk
+from build_aster_pvp_feedback import pack_apk
+from build_aster_save_path_fix import manifest_version
 
 ENGINE = '0b4db4f66e178cb878237d1aec0077a10e9bf210f3624a2c847523dde279338b'
 HOST = '686540cfb1a6676668b184ed53ecbd2962297c6e1fc75fd46e677b3fb928b6d3'

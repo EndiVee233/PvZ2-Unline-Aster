@@ -10,12 +10,12 @@ from build_aster_arm64_game import ROOT, copy_compressed_entry
 from prepare_aster_save_paths import patch
 
 
-def manifest_version(data, build_number=164, old_build=163):
-    old=f'1.7.5-Unline-Aster-v{old_build}'.encode('utf-16le')
-    new=f'1.7.5-Unline-Aster-v{build_number}'.encode('utf-16le')
+def manifest_version(data, build_number=164, old_build=163, prefix='v'):
+    old=f'1.7.5-Unline-Aster-{prefix}{old_build}'.encode('utf-16le')
+    new=f'1.7.5-Unline-Aster-{prefix}{build_number}'.encode('utf-16le')
     if len(new)!=len(old):raise ValueError('Version string length changed')
     if data.count(old)!=1:
-        raise ValueError(f'Expected v{old_build} manifest')
+        raise ValueError(f'Expected {prefix}{old_build} manifest')
     result=bytearray(data.replace(old,new))
     pool=8
     kind,header,size,count,styles,flags,start,_=struct.unpack_from('<HH6I',result,pool)

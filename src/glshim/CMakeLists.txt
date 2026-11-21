@@ -12,7 +12,7 @@ else()
     file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/prefetch_index.inc
         "static const PrefetchTexture kPrefetchTextures[1] = {};\nstatic const size_t kPrefetchTextureCount = 0;\n")
 endif()
-target_include_directories(glshim PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+target_include_directories(glshim PRIVATE ${CMAKE_CURRENT_BINARY_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/../platform)
 target_compile_features(glshim PRIVATE cxx_std_17)
 target_compile_options(glshim PRIVATE -fno-exceptions -fno-rtti -O2)
 target_include_directories(glshim PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../astc-codec/include)

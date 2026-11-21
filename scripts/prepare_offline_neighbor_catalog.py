@@ -23,6 +23,7 @@ SUPPORT={'sunflower','twinsunflower','sunshroom','birthsunflower','turnip','peac
 PEA={'peashooter','repeater','threepeater','snowpea','splitpea','peapod','torchwood','peanut','oakshooter','firepeashooter','xshot'}
 COLD={'snowpea','wintermelon','iceburg','iceshroom','wintersweet','stallia'}
 THROW={'cabbagepult','kernelpult','melonpult','wintermelon','bloomerang','carrotlauncher','pepperpult','bowlingbulb','acorn','asparagus','banana'}
+PVP_DISABLED={'streetlamp','groundcherry','magnifyinggrass','powerplant','goldleaf'}
 DEFENSE_EXCLUDED={
  'sunflower':'sun producer','twinsunflower':'sun producer',
  'sunshroom':'sun producer','birthsunflower':'sun producer',
@@ -100,7 +101,8 @@ def prepare(resource,native,out,restrict=False):
  if restrict:
   for plant in catalogue:
    if plant['name'] in DEFENSE_EXCLUDED:omitted[plant['name']]=DEFENSE_EXCLUDED[plant['name']]
-  catalogue=[p for p in catalogue if p['name'] not in DEFENSE_EXCLUDED]
+   if plant['name'] in PVP_DISABLED:omitted[plant['name']]='disabled in PvP'
+  catalogue=[p for p in catalogue if p['name'] not in DEFENSE_EXCLUDED and p['name'] not in PVP_DISABLED]
  names=extract(bundle,'PROPERTIES\\RANDOMSTRINGS.TXT').decode('utf8').splitlines()
  prefixes,suffixes=[s.strip().split(',') for s in names if s.strip()]
  special=['','FBI探员追风','妙趣横生的刘琨','迷路的柠小檬','','寒潮预报员小雪','坚果评审员阿橡','投手教练玉米叔']

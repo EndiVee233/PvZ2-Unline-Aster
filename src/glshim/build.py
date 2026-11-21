@@ -24,7 +24,7 @@ def main():
     args.output = args.output.resolve()
     args.output.mkdir(parents=True, exist_ok=True)
     # The Windows NDK driver needs an ASCII build path on some installations.
-    for name in ['glshim.cpp', 'test_decode.cpp', 'decode_pool.inc']:
+    for name in ['glshim.cpp', 'test_decode.cpp', 'test_cache.cpp', 'decode_pool.inc']:
         shutil.copy2(source / name, args.output / name)
     if args.prefetch_index:
         shutil.copy2(args.prefetch_index,args.output/'prefetch_index.inc')
@@ -35,7 +35,7 @@ def main():
              'physical_astc_block', 'quantization', 'weight_infill']
     common = [str(compiler), '--target=armv7a-linux-androideabi21', '-std=c++17',
               '-O2', '-fPIC', '-mthumb', '-fno-exceptions', '-fno-rtti',
-              '-I' + str(codec), '-I' + str(codec / 'include')]
+              '-I' + str(codec), '-I' + str(codec / 'include'), '-I' + str(source.parent / 'platform')]
     if args.diagnostics:
         common.append('-DPVZ2_DECODE_DIAGNOSTICS')
     objects = []
@@ -64,8 +64,13 @@ def main():
         test_object = args.output / 'test_decode.o'
         emit([*common, definition, '-c', str(args.output / 'test_decode.cpp')], test_object)
         emit([*common, str(test_object), *objects, *link], args.output / 'test_decode')
+        cache_object = args.output / 'test_cache.o'
+        test_root = '-DPVZ2_GL_CACHE_ROOT=' + json.dumps('/data/local/tmp/aster-glcache-check')
+        emit([*common, test_root, '-c', str(args.output / 'test_cache.cpp')], cache_object)
+        emit([*common, str(cache_object), *objects, *link], args.output / 'test_cache')
     record = {'abi': 'armeabi-v7a', 'api': 21, 'max_astc_threads': 4, 'persistent_workers': '2-4',
               'background_prefetch': bool(args.prefetch_index), 'demand_priority': True,
+              'max_background_jobs': 1, 'diagnostics': args.diagnostics,
               'cache_root': args.cache_root,
               'ndk': (args.ndk / 'source.properties').read_text(encoding='utf-8'),
               'source_sha256': hashlib.sha256((source / 'glshim.cpp').read_bytes()).hexdigest(),

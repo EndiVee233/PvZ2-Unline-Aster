@@ -1,6 +1,7 @@
 package com.popcap.pvz2cthd;
 
 import android.content.Context;
+import android.os.Build;
 import android.os.Process;
 import android.system.Os;
 import android.util.Log;
@@ -38,6 +39,26 @@ public final class AsterRgbaPilot {
     private static boolean active;
 
     private AsterRgbaPilot() {}
+
+    // Keep this in step with src/platform/aster_wsa.h. The CPU ABI and PC input
+    // devices are also shared by Android emulators which use their own GLES driver.
+    public static boolean usesWsaTextureDecoder() {
+        return matchesBuildId(Build.BRAND, "windows")
+                && matchesBuildId(Build.MANUFACTURER, "microsoft corporation")
+                && (matchesBuildId(Build.MODEL, "subsystem for android(tm)")
+                    || (matchesBuildId(Build.PRODUCT, "windows_x86_64") && matchesBuildId(Build.DEVICE, "windows_x86_64"))
+                    || (matchesBuildId(Build.PRODUCT, "windows_arm64") && matchesBuildId(Build.DEVICE, "windows_arm64")));
+    }
+
+    private static boolean matchesBuildId(String value, String lowercaseId) {
+        if (value == null || value.length() != lowercaseId.length()) return false;
+        for (int i = 0; i < value.length(); i++) {
+            int ch = value.charAt(i);
+            if (ch >= 'A' && ch <= 'Z') ch += 'a' - 'A';
+            if (ch != lowercaseId.charAt(i)) return false;
+        }
+        return true;
+    }
 
     // A previous full-RGBA build may leave expanded RSBs with the same names.
     // Restore the compressed baseline before the engine can combine both generations.
@@ -111,8 +132,9 @@ public final class AsterRgbaPilot {
     }
 
     // Called by the existing extraction worker before the speed overlay and before libSrc.
-    public static synchronized boolean useReady(Context context) {
-        if (started) return active;
+    public static synchronized boolean useReady(Context context) throws Exception {
+        boolean wsa = usesWsaTextureDecoder();
+        if (wsa && started) return active;
         File base = context.getExternalFilesDir(null);
         if (base == null) return false;
         File current = new File(base, RESOURCE);
@@ -123,6 +145,20 @@ public final class AsterRgbaPilot {
             int targetSize = plan.readInt();
             byte[] sourceHash = new byte[DIGEST_SIZE];
             plan.readFully(sourceHash);
+            if (!wsa) {
+                // An earlier install may have already activated the expanded bundle.
+                // Replace it atomically with the compressed copy from this exact APK.
+                if (!matches(current, sourceSize, sourceHash)) {
+                    restoreOriginal(context, base, current, sourceSize, sourceHash);
+                    Log.i(TAG, "Restored compressed dynamic bundle for native GLES");
+                }
+                pending.delete();
+                ready.delete();
+                new File(base, PREFIX + ".partial").delete();
+                new File(base, PREFIX + ".proof").delete();
+                new File(base, PREFIX + ".restore").delete();
+                return true;
+            }
             byte[] targetHash = null;
             if (ready.length() == 2 * DIGEST_SIZE) {
                 try (DataInputStream proof = new DataInputStream(new FileInputStream(ready))) {
@@ -154,13 +190,14 @@ public final class AsterRgbaPilot {
             ready.delete();
             return true;
         } catch (Exception e) {
+            if (!wsa) throw e;
             Log.w(TAG, "RGBA activation unavailable", e);
         }
         return false;
     }
 
     public static synchronized void start(Context context) {
-        if (started) return;
+        if (!usesWsaTextureDecoder() || started) return;
         started = true;
         if (active) return;
         Context app = context.getApplicationContext();

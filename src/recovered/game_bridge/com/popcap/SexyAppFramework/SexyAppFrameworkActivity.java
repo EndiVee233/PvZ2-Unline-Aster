@@ -37,6 +37,7 @@ public class SexyAppFrameworkActivity extends Activity {
     private SexyTextWatcher mSexyTextWatcher = null;
     private AndroidSplashScreen mSplashScreen = null;
     private AndroidUIEventManager mUIEventManager;
+    private boolean mAsterRunning;
     static boolean DEBUG = true;
     private static SexyAppFrameworkActivity sTheActivity = null;
     private static ArrayList<AndroidSplashScreen.SplashImage> mSplashScreenImages = null;
@@ -257,8 +258,14 @@ public class SexyAppFrameworkActivity extends Activity {
             Log.i("Activity", "onResume.");
         }
         super.onResume();
-        this.mGameApp.onActivityResume();
-        this.mGLView.onResume();
+        com.popcap.pvz2cthd.ReleaseUpdater.resume(this);
+        if (!mAsterRunning && this.mGameApp != null && this.mGLView != null) {
+            com.popcap.pvz2cthd.PvpMusic.setForeground(true);
+            this.mGLView.onResume();
+            this.mGameApp.onActivityResume();
+            this.mGLView.requestFocus();
+            mAsterRunning = true;
+        }
     }
 
     @Override // android.app.Activity
@@ -266,9 +273,10 @@ public class SexyAppFrameworkActivity extends Activity {
         if (DEBUG) {
             Log.i("Activity", "onPause.");
         }
+        com.popcap.pvz2cthd.ReleaseUpdater.pause(this);
         super.onPause();
-        this.mGLView.onPause();
-        this.mGameApp.onActivityPause();
+        // WSA may pause a visible window when another window is activated.
+        // Keep simulation, rendering and music active until onStop.
     }
 
     @Override // android.app.Activity
@@ -277,7 +285,15 @@ public class SexyAppFrameworkActivity extends Activity {
             Log.i("Activity", "onStop.");
         }
         super.onStop();
-        this.mGameApp.onActivityStop();
+        if (this.mGameApp != null) {
+            if (mAsterRunning) {
+                com.popcap.pvz2cthd.PvpMusic.setForeground(false);
+                this.mGameApp.onActivityPause();
+                this.mGLView.onPause();
+                mAsterRunning = false;
+            }
+            this.mGameApp.onActivityStop();
+        }
     }
 
     @Override // android.app.Activity
@@ -324,7 +340,14 @@ public class SexyAppFrameworkActivity extends Activity {
             Log.i("Activity", "onWindowFocusChanged.");
         }
         super.onWindowFocusChanged(hasFocus);
-        this.mGameApp.onWindowFocusChanged(hasFocus);
+        if (this.mGameApp != null && this.mUIEventManager != null) {
+            if (hasFocus) {
+                this.mUIEventManager.HandleGotFocus();
+                this.mGameApp.onWindowFocusChanged(true);
+            } else {
+                this.mUIEventManager.HandleLostFocus();
+            }
+        }
     }
 
     @Override // android.app.Activity

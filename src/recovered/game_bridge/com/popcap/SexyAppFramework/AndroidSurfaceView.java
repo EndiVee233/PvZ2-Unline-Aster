@@ -32,10 +32,12 @@ public class AndroidSurfaceView extends GLSurfaceView {
     private AndroidUIEventManager mUIEventManager;
     private float mViewScaleFactor;
     private WindowManager mWindowManager;
-    public boolean mbDrawingFrames;
-    public boolean mbFocusState;
+    public volatile boolean mbDrawingFrames;
+    public volatile boolean mbFocusState;
     private boolean mbIsInitialized;
-    public Object mbNotifyOnDrawEventObject;
+    public volatile Object mbNotifyOnDrawEventObject;
+    private boolean mDesktopRightDown;
+    private boolean mDesktopMiddleDown;
     static boolean DEBUG = true;
     static boolean ShowFPS = false;
     static String LogTAG = "SexyEGL";
@@ -193,6 +195,15 @@ public class AndroidSurfaceView extends GLSurfaceView {
     }
 
     @Override // android.view.SurfaceView, android.view.View
+    public void onWindowFocusChanged(boolean hasWindowFocus) {
+        super.onWindowFocusChanged(hasWindowFocus);
+        if (!hasWindowFocus) {
+            mDesktopRightDown = false;
+            mDesktopMiddleDown = false;
+        }
+    }
+
+    @Override
     protected void dispatchDraw(Canvas canvas) {
         super.dispatchDraw(canvas);
     }
@@ -448,12 +459,7 @@ public class AndroidSurfaceView extends GLSurfaceView {
         @Override // android.opengl.GLSurfaceView.Renderer
         public void onDrawFrame(GL10 gl) {
             this.mGLView.mbDrawingFrames = true;
-            if (this.mGLView.mbNotifyOnDrawEventObject != null) {
-                synchronized (this.mGLView.mbNotifyOnDrawEventObject) {
-                    this.mGLView.mbNotifyOnDrawEventObject.notifyAll();
-                    this.mGLView.mbNotifyOnDrawEventObject = null;
-                }
-            } else if (!this.mGLView.mbFocusState) {
+            if (!AsterBackgroundFrames.acknowledgeFrame(this.mGLView) && !this.mGLView.mbFocusState) {
                 if (AndroidSurfaceView.DEBUG) {
                     Log.i("Surface", "onDrawFrame - Don't Draw, don't update when we're suspended.");
                     return;

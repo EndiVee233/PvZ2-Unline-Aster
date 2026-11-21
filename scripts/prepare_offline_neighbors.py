@@ -5,8 +5,8 @@ ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'scripts'))
 from merge_legacy_pvp_resources import Bundle,u32
 
-def generate(out,expansion=False,rich=False):
- with zipfile.ZipFile(ROOT/'pvz2data.zip') as z:
+def generate(out,expansion=False,rich=False,resource_zip=None):
+ with zipfile.ZipFile(resource_zip if resource_zip is not None else ROOT/'pvz2data.zip') as z:
   bundle=Bundle(z.read('com.popcap.pvz2cthd/files/dynamic.rsb.smf'))
  i,name,info=next((i,n,k) for i in range(len(bundle.groups)) for n,k in bundle.files(i) if n.endswith('PROPERTIES\\RANDOMSTRINGS.TXT'))
  d=bundle.payloads[i];sec=d[u32(d,0x18):u32(d,0x18)+u32(d,0x1c)]

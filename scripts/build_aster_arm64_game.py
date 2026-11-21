@@ -14,8 +14,16 @@ from zipfile import ZipFile, ZIP_STORED
 
 ROOT = Path(__file__).resolve().parents[1]
 GUESTS = ('Src', 'czProject', 'HookPVZ2', 'Restart', 'PresetEditor', 'AsterRgbaPilot')
+GUEST_LOAD_LITERAL = re.compile(
+    r'(const-string(?:/jumbo)? \w+, )"(?:' + '|'.join(GUESTS[1:]) + r')"'
+)
 TYPES = dict(V='void', Z='jboolean', B='jbyte', C='jchar', S='jshort', I='jint',
              J='jlong', F='jfloat', D='jdouble')
+
+
+def retarget_arm64_guest_loads(smali):
+    # Android loads the host. The host initializes its ARM32 guests itself.
+    return GUEST_LOAD_LITERAL.sub(r'\1"Src"', smali)
 
 
 def signature_parts(signature):
@@ -184,7 +192,7 @@ def prepare_java(apk, output, sdk):
     names = ('classes.dex', 'classes2.dex', 'classes8.dex', 'classes9.dex',
              'classes10.dex', 'classes11.dex')
     output.mkdir(parents=True, exist_ok=True)
-    apktool = ROOT / 'tools/apktool.jar'
+    apktool = ROOT.parent / 'tools/apktool.jar'
     subprocess.run(['javac', '-cp', apktool, '-d', output, ROOT / 'scripts/RepairDex.java'], check=True)
     repair = ['java', '-Xmx512m', '-cp', str(apktool) + os.pathsep + str(output), 'RepairDex']
     speed_feedback = compile_speed_feedback(sdk, output, repair)
@@ -238,10 +246,7 @@ def prepare_java(apk, output, sdk):
                     if owner in contracts:
                         raise ValueError('Duplicate class in executable DEX: ' + owner)
                     contracts[owner] = methods
-                # The ARM64 host loads the A32 guests itself. Repeated load of
-                # Src is idempotent; Android must not load an A32 helper natively.
-                edited = re.sub(r'(const-string(?:/jumbo)? \w+, )"(?:czProject|HookPVZ2|Restart|PresetEditor|AsterRgbaPilot)"',
-                                r'\1"Src"', text)
+                edited = retarget_arm64_guest_loads(text)
                 if owner == 'com/popcap/SexyAppFramework/SexyAppFrameworkActivity':
                     edited, count = re.subn(r'(?<=    )invoke-direct \{p0\}, Lcom/popcap/SexyAppFramework/SexyAppFrameworkActivity;->NeedLoadCacheLib\(\)Z\s+move-result v0',
                                            'const/4 v0, 0x1', edited)

@@ -1,7 +1,11 @@
-"""Compile A195's PvP backend and place it in the matching A187 engine."""
+"""Apply the PvP review fixes to the exact A187 shared guest engine."""
 from io import BytesIO
+from copy import deepcopy
 from pathlib import Path
+from zipfile import ZipFile
 import hashlib
+import importlib.util
+import json
 import re
 import struct
 import subprocess
@@ -9,7 +13,10 @@ import subprocess
 from elftools.elf.elffile import ELFFile
 from keystone import Ks, KS_ARCH_ARM, KS_MODE_ARM
 
+from index_texture_prefetch import ResourceZip
 from prepare_aster_pvp_runtime import file_offset
+from prepare_offline_neighbor_catalog import PVP_DISABLED, Bundle, decode, extract
+from prepare_opening_tutorial_resources import update_level
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -27,8 +34,77 @@ BASELINE_FIXES = {
 }
 
 
+def prepare_resource(original):
+    bundle = Bundle(original)
+    updated = {}
+
+    def update(level):
+        for obj in level["objects"]:
+            prop = obj["objdata"]
+            if obj["objclass"] == "PVPSeedBankProperties" and "PlantList" in prop:
+                prop["PlantList"] = [plant for plant in prop["PlantList"]
+                                     if plant["PlantName"] not in PVP_DISABLED]
+
+    for index in range(len(bundle.groups)):
+        for name, _ in bundle.files(index):
+            if name.startswith("PACKAGES\\LEVELS\\ARENA_") and name.endswith(".RTON"):
+                original_level = decode(extract(bundle, name))
+                expected = deepcopy(original_level)
+                update(expected)
+                if expected != original_level:
+                    updated[name] = update_level(bundle, name, update)
+    result = bundle.build()
+    check = Bundle(result)
+    for path, expected in updated.items():
+        assert decode(extract(check, path)) == expected
+    return result, sorted(updated)
+
+
+def generate_headers(apk, engine, resource, catalogue, baseline, output):
+    from prepare_offline_economy import prepare as training
+    from prepare_offline_neighbor_catalog import prepare as neighbors
+    import prepare_offline_dave
+    import prepare_offline_evolution
+    import prepare_offline_exchange
+    import prepare_offline_neighbors
+    import prepare_offline_progression
+    import prepare_offline_research
+
+    archived = baseline / "scripts/prepare_offline_neighbor_catalog.py"
+    spec = importlib.util.spec_from_file_location("aster_legacy_catalogue", archived)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    generated = output / "baseline-generated"
+    training(apk, generated)
+    prepare_offline_progression.prepare(resource, generated)
+    prepare_offline_evolution.prepare(resource, generated)
+    prepare_offline_research.prepare(resource, generated)
+    prepare_offline_exchange.prepare(resource, generated)
+    prepare_offline_dave.prepare(generated, reference=True)
+    prepare_offline_neighbors.generate(generated, expansion=True, rich=True, resource_zip=ResourceZip(apk))
+    module.prepare(resource, engine, generated, restrict=True)
+    current = output / "generated"
+    current.mkdir(exist_ok=True)
+    for header in generated.glob("*.h"):
+        (current / header.name).write_bytes(header.read_bytes())
+    for table in generated.glob("*-presets.json"):
+        (current / table.name).write_bytes(table.read_bytes())
+    neighbors(resource, engine, current, restrict=True)
+
+    for directory, plants in ((generated, catalogue), (current, [
+        {**plant, "allowed": False} if plant["name"] in PVP_DISABLED else plant for plant in catalogue
+    ])):
+        source = ['struct EditorPlantSpec {unsigned id,maxLevel;char alias[32];};',
+                  'static const EditorPlantSpec EDITOR_PLANTS[]={']
+        source.extend('{{{},{},\"{}\"}},'.format(p["id"], p["maxLevel"], p["name"])
+                      for p in plants if p["allowed"])
+        source.extend(['};', 'static constexpr unsigned EDITOR_PLANT_COUNT=sizeof(EDITOR_PLANTS)/sizeof(EDITOR_PLANTS[0]);'])
+        (directory / "preset_editor_catalog.h").write_text("\n".join(source) + "\n")
+    return generated, current, plants
+
+
 def compile_payload(sdk, source, headers, output, address, runtime, *, archived):
-    output.mkdir(parents=True, exist_ok=True)
+    output.mkdir(exist_ok=True)
     compiler = sdk / 'ndk/27.0.12077973/toolchains/llvm/prebuilt/windows-x86_64/bin/clang++.exe'
     flags = re.findall(r"-D[A-Z_]+", (ROOT / 'scripts/build_pvp_v39.py').read_text(encoding='utf8')
                        .split("compiler=", 1)[1].split("subprocess.run([compiler,*flags,", 1)[0])
@@ -278,3 +354,23 @@ def patch_engine(engine, old, new):
     assert installed[file_offset(check, NEW_CODE, len(relocated.data())):][:len(relocated.data())] == relocated.data()
     assert installed[file_offset(check, NEW_STATE, len(state.data())):][:len(state.data())] == state.data()
     return bytes(installed), moved
+
+
+def prepare(apk, sdk, baseline, output):
+    output.mkdir(parents=True, exist_ok=True)
+    with ZipFile(apk) as source:
+        engine = source.read('lib/armeabi/libSrc.so')
+        resource = source.read('assets/reconstruction/dynamic-original-speed.rsb.smf')
+        catalogue = json.loads(source.read('assets/pvp-presets/catalogue.json'))
+    original_headers, headers, plants = generate_headers(apk, engine, resource, catalogue, baseline, output)
+    old = compile_payload(sdk, baseline / 'src', original_headers, output / 'baseline',
+                          BASELINE_CODE, 0x1b00000, archived=True)
+    new = compile_payload(sdk, ROOT / 'src', headers, output / 'new', NEW_CODE, NEW_STATE, archived=False)
+    native, moved = patch_engine(engine, old, new)
+    dynamic, levels = prepare_resource(resource)
+    (output / 'libSrc.so').write_bytes(native)
+    (output / 'offline.elf').write_bytes(new.read_bytes())
+    (output / 'dynamic.rsb.smf').write_bytes(dynamic)
+    (output / 'catalogue.json').write_text(json.dumps(plants, indent=2) + '\n', encoding='utf8')
+    (output / 'engine.json').write_text(json.dumps({'entry_points': moved, 'levels': levels}, indent=2) + '\n')
+    return engine, resource

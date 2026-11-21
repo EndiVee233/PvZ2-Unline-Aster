@@ -15,6 +15,10 @@ import org.json.*;
 final class GithubPresetCatalog {
     private static final String REPOSITORY = "EndiVee233/PvZ2-Unline-Aster";
     private static final String DIRECTORY = "pvp-presets";
+    private static final String SPECIAL_DIRECTORY = DIRECTORY + "/special-enemies";
+    private static final String FBI_FILE = "fbi" + PvpLevelStorage.SUFFIX;
+    private static final int SPECIAL_DIRECTORY_MARKER = 1 << 16;
+    private static final int FBI_DIRECTORY_MARKER = 1 << 17;
     private static final int MAX_FILES = 1000;
     private static final int MAX_INDEX_BYTES = 2 * 1024 * 1024;
     private static final int ENTRY_WORDS = 224;
@@ -40,11 +44,13 @@ final class GithubPresetCatalog {
                 PvpPresetDocument.read(activity.getAssets().open("pvp-presets/catalogue.json")), StandardCharsets.UTF_8));
             PvpLevelStorage storage = new PvpLevelStorage(activity);
             File cache = enabled ? storage.github() : null;
+            File specialCache = cache == null ? null : storage.githubSpecial();
             if (cache != null) migrateCache(activity, cache);
-            publish(request, readPool(storage, cache, plants));
+            publish(request, readPool(storage, cache, specialCache, plants));
             if (download && request == generation) {
-                sync(cache, request);
-                publish(request, readPool(storage, cache, plants));
+                trySync(cache, DIRECTORY, request);
+                trySync(specialCache, SPECIAL_DIRECTORY, request);
+                publish(request, readPool(storage, cache, specialCache, plants));
             }
         } catch (Exception e) {
             Log.i("PvpPresetEditor", "PVP level load failed (" + e.getClass().getSimpleName() + ")", e);
@@ -104,9 +110,18 @@ final class GithubPresetCatalog {
         }
     }
 
-    private static void sync(File cache, int request) throws Exception {
+    private static void trySync(File cache, String directory, int request) {
+        if (cache == null || request != generation) return;
+        try {
+            sync(cache, directory, request);
+        } catch (Exception e) {
+            Log.i("PvpPresetEditor", "Retained cached GitHub levels for " + directory, e);
+        }
+    }
+
+    private static void sync(File cache, String remoteDirectory, int request) throws Exception {
         Endpoint api = new Endpoint("api.github.com", "140.82.113.5", "20.27.177.116");
-        byte[] directory = api.fetch("/repos/" + REPOSITORY + "/contents/" + DIRECTORY + "?ref=main", MAX_INDEX_BYTES);
+        byte[] directory = api.fetch("/repos/" + REPOSITORY + "/contents/" + remoteDirectory + "?ref=main", MAX_INDEX_BYTES);
         List<RemoteFile> files = listing(directory);
         if (request != generation) return;
         Endpoint raw = new Endpoint("raw.githubusercontent.com", "185.199.108.133", "185.199.109.133");
@@ -119,7 +134,7 @@ final class GithubPresetCatalog {
                 pending.add(downloads.submit(() -> {
                     if (request != generation) return;
                     try {
-                        String path = new URI(null, null, "/" + REPOSITORY + "/main/" + DIRECTORY + "/" + file.name, null).toASCIIString();
+                        String path = new URI(null, null, "/" + REPOSITORY + "/main/" + remoteDirectory + "/" + file.name, null).toASCIIString();
                         byte[] data = raw.fetch(path, PvpPresetDocument.MAX_BYTES);
                         if (!matchesBlob(file, data)) throw new IOException("Git blob changed during sync");
                         if (request == generation) PvpLevelStorage.write(file.cacheFile(cache).getBaseFile(), data);
@@ -152,25 +167,41 @@ final class GithubPresetCatalog {
         return file.sha.contentEquals(hex);
     }
 
-    private static int[] readPool(PvpLevelStorage storage, File cache, PvpPresetDocument.Catalogue plants) {
+    private static int[] readPool(PvpLevelStorage storage, File cache, File specialCache,
+                                  PvpPresetDocument.Catalogue plants) {
         Pool pool = new Pool();
+        loadCache(pool, specialCache, plants, true);
+        int specialCount = pool.words[0];
         for (File local : storage.localLevels()) {
             if (pool.full()) break;
             try {
-                pool.add("local/" + local.getName(), PvpPresetDocument.read(new FileInputStream(local)), plants);
+                pool.add("local/" + local.getName(), PvpPresetDocument.read(new FileInputStream(local)), plants, 0);
             } catch (Exception ignored) {
                 // Individual invalid files cannot block the rest of the library.
             }
         }
-        int localCount = pool.words[0];
-        if (cache != null) try {
+        int localCount = pool.words[0] - specialCount;
+        loadCache(pool, cache, plants, false);
+        Log.i("PvpPresetEditor", "PVP level library loaded: local=" + localCount
+            + ", github=" + (pool.words[0] - localCount - specialCount) + ", special=" + specialCount);
+        return Arrays.copyOf(pool.words, 1 + pool.words[0] * ENTRY_WORDS);
+    }
+
+    private static void loadCache(Pool pool, File cache, PvpPresetDocument.Catalogue plants, boolean special) {
+        if (cache == null) return;
+        try {
             AtomicFile index = new AtomicFile(new File(cache, "directory.json"));
             for (RemoteFile file : listing(read(index.openRead(), MAX_INDEX_BYTES))) {
                 if (pool.full()) break;
                 try {
                     byte[] data = PvpPresetDocument.read(file.cacheFile(cache).openRead());
-                    if (matchesBlob(file, data)) pool.add(file.name, data, plants);
-                    else file.cacheFile(cache).delete();
+                    if (!matchesBlob(file, data)) {
+                        file.cacheFile(cache).delete();
+                        continue;
+                    }
+                    int marker = special ? SPECIAL_DIRECTORY_MARKER : 0;
+                    if (special && FBI_FILE.equals(file.name)) marker |= FBI_DIRECTORY_MARKER;
+                    pool.add((special ? "special-enemies/" : "") + file.name, data, plants, marker);
                 } catch (Exception ignored) {
                     // An unavailable cache entry leaves other levels usable.
                 }
@@ -178,8 +209,6 @@ final class GithubPresetCatalog {
         } catch (Exception ignored) {
             // No usable GitHub index yet.
         }
-        Log.i("PvpPresetEditor", "PVP level library loaded: local=" + localCount + ", github=" + (pool.words[0] - localCount));
-        return Arrays.copyOf(pool.words, 1 + pool.words[0] * ENTRY_WORDS);
     }
 
     private static final class Pool {
@@ -188,9 +217,9 @@ final class GithubPresetCatalog {
 
         boolean full() { return words[0] == MAX_FILES; }
 
-        void add(String key, byte[] data, PvpPresetDocument.Catalogue plants) throws Exception {
+        void add(String key, byte[] data, PvpPresetDocument.Catalogue plants, int marker) throws Exception {
             PvpPresetDocument formation = PvpPresetDocument.parse(data, plants);
-            if (formation.plants.isEmpty()) return;
+            if (formation.plants.isEmpty() || (marker != 0 && (!formation.effectiveSpecial() || formation.appearance == 0))) return;
             byte[] hash = MessageDigest.getInstance("SHA-256").digest(key.getBytes(StandardCharsets.UTF_8));
             int seed = java.nio.ByteBuffer.wrap(hash).getInt();
             if (seed == 0 || !seeds.add(seed)) return;
@@ -203,7 +232,7 @@ final class GithubPresetCatalog {
                 words[at + 3 + j] = point;
                 offset += Character.charCount(point);
             }
-            words[at + 43] = formation.effectiveSpecial() ? formation.appearance + 1 : 0;
+            words[at + 43] = marker | (formation.effectiveSpecial() ? formation.appearance + 1 : 0);
             for (int j = 0; j < formation.plants.size(); j++)
                 System.arraycopy(formation.plants.get(j), 0, words, at + 44 + 4 * j, 4);
         }

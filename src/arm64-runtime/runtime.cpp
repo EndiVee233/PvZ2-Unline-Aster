@@ -8,6 +8,7 @@
 #include "aster_dl.h"
 #include "aster_gles.h"
 #include "aster_zlib.h"
+#include "../platform/aster_wsa.h"
 #include <android/asset_manager_jni.h>
 #include <android/log.h>
 #include <jni.h>
@@ -88,26 +89,23 @@ uint32_t registerResourceHash(DynarmicHost& host) {
     });
 }
 bool installResourceHash(DynarmicHost& host,uint32_t replacement) {
-    // A175 moved the GLShim entries. Verify their prologues for either layout.
-    constexpr uint32_t updated=0x4504ea10,legacy=0x4504e98c;
-    constexpr uint8_t expected[]={0xf0,0xb5,0x03,0xaf,0x2d,0xe9,0x00,0x07,0xd7,0xe9,0x02,0xa8,0x40,0xf6,0xb0,0x7c};
-    const uint32_t function=memcmp(host.GetGuestMemoryBase()+updated,expected,sizeof(expected)) ? legacy : updated;
-    if (!replacement || memcmp(host.GetGuestMemoryBase()+function,expected,sizeof(expected))) return false;
+    const auto slot=host.FindLibrarySymbol("libRestart.so","aster_glshim_hash");
+    if (!slot || !replacement) return false;
+    const auto function=host.MemoryRead32(slot);
+    if (!host.IsExecutableAddress(function)) return false;
     const auto input=host.GuestAlloc(4096);
     if (!input) return false;
     for (unsigned i=0;i<4096;++i) host.MemoryWrite8(input+i,uint8_t(i*37));
     bool passed=true;
     for (uint32_t size : {0u,4u,4096u}) {
         const std::vector<uint32_t> args{input,size,512,128,0x93b0,size};
-        const uint32_t low=host.RunFunction(function|1,args),high=host.CurrentJit().Regs()[1];
+        const uint32_t low=host.RunFunction(function,args),high=host.CurrentJit().Regs()[1];
         const auto value=resourceHash(host.GetGuestMemoryBase()+input,size,512,128,0x93b0,size);
         passed=passed && (uint64_t(low)|(uint64_t(high)<<32))==value && !host.HasFailed();
     }
     host.GuestFree(input);
     if (!passed) return false;
-    host.MemoryWrite32(function,0xf000f8df); // Thumb ldr.w pc,[pc,#0]
-    host.MemoryWrite32(function+4,replacement);
-    host.InvalidateGuestCode(function,8);
+    host.MemoryWrite32(slot,replacement);
     __android_log_print(ANDROID_LOG_INFO,"AsterArm64","Native resource hash verified against A32 (3 cases) and installed");
     return true;
 }
@@ -125,11 +123,14 @@ uint32_t registerResourceCodec(DynarmicHost& host) {
     });
 }
 bool installResourceCodec(DynarmicHost& host,uint32_t replacement) {
-    constexpr uint32_t updated=0x4505203c,legacy=0x45051eb0;
+    // The companion pilot is an unchanged stripped binary. Verify its entry
+    // and decoded pixels before installing its native Thumb trampoline.
+    constexpr uint32_t pilotDecoder=0x47047108;
     constexpr uint8_t expected[]={0xf0,0xb5,0x03,0xaf,0x4d,0xf8,0x04,0x8d,0x8a,0xb0,0x0e,0x46,0xb9,0x68,0x04,0x46};
-    const uint32_t shimDecoder=memcmp(host.GetGuestMemoryBase()+updated,expected,sizeof(expected)) ? legacy : updated;
-    const uint32_t functions[]={shimDecoder,0x47047108};
-    for (auto fn : functions) if (memcmp(host.GetGuestMemoryBase()+fn,expected,sizeof(expected))) return false;
+    const auto slot=host.FindLibrarySymbol("libRestart.so","aster_glshim_decode");
+    if (!slot || !replacement || memcmp(host.GetGuestMemoryBase()+pilotDecoder,expected,sizeof(expected))) return false;
+    const uint32_t functions[]={host.MemoryRead32(slot),pilotDecoder|1};
+    if (!host.IsExecutableAddress(functions[0])) return false;
     const auto data=host.GuestAlloc(16),output=host.GuestAlloc(6*6*4);
     if (!data || !output) return false;
     // ASTC LDR void-extent block with opaque red UNORM16 channels.
@@ -140,7 +141,7 @@ bool installResourceCodec(DynarmicHost& host,uint32_t replacement) {
         const uint32_t dimension=fp==astc_codec::FootprintType::k4x4 ? 4 : fp==astc_codec::FootprintType::k5x5 ? 5 : 6;
         const uint32_t size=dimension*dimension*4;
         memset(host.GetGuestMemoryBase()+output,0,size);
-        const auto decoded=host.RunFunction(fn|1,{data,16,dimension,dimension,uint32_t(fp),output,size,dimension*4});
+        const auto decoded=host.RunFunction(fn,{data,16,dimension,dimension,uint32_t(fp),output,size,dimension*4});
         std::array<uint8_t,6*6*4> reference{};
         const bool native=astc_codec::ASTCDecompressToRGBA(block,16,dimension,dimension,fp,reference.data(),size,dimension*4);
         passed=passed && decoded==1 && native && !host.HasFailed()
@@ -149,9 +150,10 @@ bool installResourceCodec(DynarmicHost& host,uint32_t replacement) {
     }
     host.GuestFree(data);host.GuestFree(output);
     if (!passed) return false;
-    for (auto fn : functions) {
-        host.MemoryWrite32(fn,0xf000f8df);host.MemoryWrite32(fn+4,replacement);host.InvalidateGuestCode(fn,8);
-    }
+    host.MemoryWrite32(slot,replacement);
+    host.MemoryWrite32(pilotDecoder,0xf000f8df);
+    host.MemoryWrite32(pilotDecoder+4,replacement);
+    host.InvalidateGuestCode(pilotDecoder,8);
     __android_log_print(ANDROID_LOG_INFO,"AsterArm64","Native ASTC verified against both A32 codecs (4x4/5x5/6x6) and installed");
     return true;
 }
@@ -220,19 +222,20 @@ bool bootstrap(JNIEnv* env) {
     runtime=new AsterRuntimeHost;
     if (!runtime->Initialize()) return false;
     registerAsterZlib(*runtime);registerAsterGles(*runtime);registerAsterLibc(*runtime);
-    const auto hashThunk=registerResourceHash(*runtime);
-    const auto codecThunk=registerResourceCodec(*runtime);
+    const bool wsa=aster_is_wsa();
+    const auto hashThunk=wsa ? registerResourceHash(*runtime) : 0;
+    const auto codecThunk=wsa ? registerResourceCodec(*runtime) : 0;
 #ifdef ASTER_RUNTIME_DIAGNOSTICS
     const auto animationTrace=registerAnimationTrace(*runtime);
 #endif
     if (!registerAsterDynamicLoader(*runtime,manager)) return false;
     auto& jni=FakeJniEnv::Instance();
     if (!jni.Init(*runtime) || !runtime->LoadGuestLibraries(manager)) return false;
-    if (!installResourceHash(*runtime,hashThunk)) {
+    if (wsa && !installResourceHash(*runtime,hashThunk)) {
         __android_log_print(ANDROID_LOG_ERROR,"AsterArm64","GLShim resource hash thunk could not be installed");
         return false;
     }
-    if (!installResourceCodec(*runtime,codecThunk)) {
+    if (wsa && !installResourceCodec(*runtime,codecThunk)) {
         __android_log_print(ANDROID_LOG_ERROR,"AsterArm64","ASTC decoder thunks could not be installed");
         return false;
     }
@@ -250,6 +253,9 @@ bool bootstrap(JNIEnv* env) {
             if (version!=JNI_VERSION_1_6 || env->ExceptionCheck() || jni.HasFailed() || runtime->HasFailed()) return false;
         }
     }
+#ifdef ASTER_RESIDENT_EXPERIMENT
+    if (!runtime->RunLibraryConstructors("libAsterRsg.so")) return false;
+#endif
     __android_log_print(ANDROID_LOG_INFO,"AsterArm64","Runtime loaded; real game initialization pending");
     return true;
 }

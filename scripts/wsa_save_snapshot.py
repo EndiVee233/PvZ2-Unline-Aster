@@ -24,7 +24,7 @@ def call(*args):
     return subprocess.run([ADB, *args], check=True, capture_output=True, timeout=90).stdout
 
 
-def inspect_archive(raw, paths=PATHS):
+def inspect_archive(raw, paths=PATHS, *, require_player=True):
     with tarfile.open(fileobj=io.BytesIO(raw)) as archive:
         files = {}
         for member in archive.getmembers():
@@ -37,7 +37,7 @@ def inspect_archive(raw, paths=PATHS):
                 raise ValueError('Unexpected archive link or special file')
             if member.isfile():
                 files[member.name] = hashlib.sha256(archive.extractfile(member).read()).hexdigest()
-        if paths == PATHS and 'files/userdataNo_Backup/pp.dat' not in files:
+        if require_player and paths == PATHS and 'files/userdataNo_Backup/pp.dat' not in files:
             raise ValueError('Player save missing from archive')
         return files
 
@@ -121,7 +121,9 @@ def restore():
     stop()
     # Keep the complete test state as a second recovery option before replacement.
     current = capture()
-    inspect_archive(current)
+    # A clean extraction run can reach the game before any player is created.
+    # The baseline and restored archive still require a verified player save.
+    inspect_archive(current, require_player=False)
     (folder / ('before-restore-' + stamp() + '.tar')).write_bytes(current)
     remote = '/data/local/tmp/pvz2-test-save-restore.tar'
     call('push', str(folder / 'saves.tar'), remote)

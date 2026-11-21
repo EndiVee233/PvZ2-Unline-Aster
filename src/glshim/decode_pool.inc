@@ -23,6 +23,7 @@ class DecodePool {
     std::deque<DecodeWork> urgent, background;
     bool started = false;
     int count = 0;
+    int backgroundRunning = 0;
     static void *entry(void *p) { static_cast<DecodePool *>(p)->loop(); return nullptr; }
     void loop() {
         for (;;) {
@@ -30,12 +31,19 @@ class DecodePool {
             bool foreground;
             {
                 std::unique_lock<std::mutex> lock(mutex);
-                wake.wait(lock, [&]{ return !urgent.empty() || !background.empty(); });
+                // Spare CPU capacity for the game/Houdini. A requested texture
+                // is promoted to urgent and can still use the entire pool.
+                wake.wait(lock, [&]{ return !urgent.empty() || (!background.empty() && backgroundRunning==0); });
                 foreground = !urgent.empty();
                 auto &queue = foreground ? urgent : background;
                 job = std::move(queue.front()); queue.pop_front();
+                if(!foreground)++backgroundRunning;
             }
             job.run();
+            if(!foreground){
+                std::lock_guard<std::mutex> lock(mutex);
+                --backgroundRunning;wake.notify_all();
+            }
         }
     }
 public:
@@ -137,6 +145,44 @@ static void queue_prefetch_next() {
     decode_pool().submit(false, 0, []{ prefetch_next(); });
 }
 
+// Only the requested atlas is needed. Its existing hash verifies the bytes
+// after extraction, so prefetch can stop as soon as the complete slice exists.
+static bool read_packed_texture(FILE *file, const PrefetchTexture &texture, uint8_t *output) {
+    constexpr unsigned chunk = 32 * 1024;
+    if (fseeko(file, (off_t)texture.partOffset, SEEK_SET) != 0) return false;
+    auto buffer = std::unique_ptr<uint8_t, decltype(&free)>((uint8_t *)malloc(2 * chunk), free);
+    if (!buffer) return false;
+
+    z_stream stream{};
+    if (inflateInit(&stream) != Z_OK) return false;
+    uint64_t left = texture.packed;
+    const uint64_t end = (uint64_t)texture.offset + texture.bytes;
+    int status = Z_OK;
+    while (stream.total_out < end && status == Z_OK) {
+        if (!stream.avail_in && left) {
+            unsigned size = (unsigned)std::min<uint64_t>(left, chunk);
+            if (fread(buffer.get(), 1, size, file) != size) {
+                status = Z_DATA_ERROR;
+                break;
+            }
+            left -= size;
+            stream.next_in = buffer.get();
+            stream.avail_in = size;
+        }
+        if (stream.total_out < texture.offset) {
+            stream.next_out = buffer.get() + chunk;
+            stream.avail_out = (unsigned)std::min<uint64_t>(texture.offset - stream.total_out, chunk);
+        } else {
+            stream.next_out = output + (stream.total_out - texture.offset);
+            stream.avail_out = (unsigned)(end - stream.total_out);
+        }
+        status = inflate(&stream, Z_NO_FLUSH);
+    }
+    const bool complete = stream.total_out == end && (status == Z_OK || status == Z_STREAM_END);
+    inflateEnd(&stream);
+    return complete;
+}
+
 static void prefetch_next() {
     const PrefetchTexture *texture;
     {
@@ -176,19 +222,11 @@ static void prefetch_next() {
             readOK = fseeko(file,(off_t)(t.partOffset+t.offset),SEEK_SET)==0 &&
                      fread(state->source,1,t.bytes,file)==t.bytes;
         } else if (t.packed <= 128*1024*1024) {
-            auto packed=(uint8_t *)malloc(t.packed); auto raw=(uint8_t *)malloc(t.raw);
-            if (packed && raw && fseeko(file,(off_t)t.partOffset,SEEK_SET)==0 &&
-                fread(packed,1,t.packed,file)==t.packed) {
-                uLongf size=t.raw;
-                if (uncompress(raw,&size,packed,t.packed)==Z_OK && size==t.raw) {
-                    memcpy(state->source,raw+t.offset,t.bytes); readOK=true;
-                }
-            }
-            free(packed); free(raw);
+            readOK = read_packed_texture(file, t, state->source);
         }
     }
     fclose(file);
-    if (!readOK || astc_hash(state->source,t.bytes,t.width,t.height,t.format,t.bytes)!=t.hash) {
+    if (!readOK || aster_glshim_hash(state->source,t.bytes,t.width,t.height,t.format,t.bytes)!=t.hash) {
         queue_prefetch_next(); return;
     }
     const int by=t.format==0x93b4 ? 6 : 5, rowsPerStrip=32;
@@ -212,7 +250,7 @@ static void prefetch_next() {
                  (unsigned long long)state->hash,state->width,state->height,s.y,s.h,s.size,int(state->footprint));
 #endif
             s.out=(uint8_t *)malloc(bytes);
-            s.ok=s.out && astc_codec::ASTCDecompressToRGBA(state->source+s.off,s.size,
+            s.ok=s.out && aster_glshim_decode(state->source+s.off,s.size,
                  state->width,s.h,state->footprint,s.out,bytes,(size_t)state->width*4);
             if (state->remaining.fetch_sub(1)==1) {
                 bool ok=true;for (const auto &strip:state->strips) ok &= strip.ok;

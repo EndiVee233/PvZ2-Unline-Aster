@@ -22,6 +22,7 @@
 #include <unistd.h>
 #include <sys/mman.h>
 #include <sys/statvfs.h>
+#include <sys/system_properties.h>
 #include <locale.h>
 #include <unordered_map>
 
@@ -165,6 +166,12 @@ int32_t asterGuestStringCompare(Host& host,uint32_t a,uint32_t b,bool ignoreCase
 void registerAsterLibc(Host& host) {
     auto& manager = host.GetThunkManager();
     registerAsterLocale(host);
+    manager.RegisterThunk("__system_property_get", [](Jit& jit, Host& guest) {
+        const auto* name = string<char>(guest, jit.Regs()[0]);
+        auto* value = span<char>(guest, jit.Regs()[1], PROP_VALUE_MAX);
+        if (!value || !name) { jit.Regs()[0] = 0; return; }
+        jit.Regs()[0] = __system_property_get(name, value);
+    });
     for (auto [name, function] : {std::pair{"sqrtf", &::sqrtf}, {"roundf", &::roundf}}) {
         manager.RegisterThunk(name, [function](Jit& jit, Host&) {
             jit.Regs()[0] = std::bit_cast<uint32_t>(function(std::bit_cast<float>(jit.Regs()[0])));

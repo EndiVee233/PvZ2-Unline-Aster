@@ -2,7 +2,7 @@
 
 ## 正式版下载
 
-优先选择 ARM32。需要 ARM64 的设备请下载对应安装包。 [下载最新正式版](https://github.com/EndiVee233/PvZ2-Unline-Aster/releases/latest) · [A197 构建与验证](docs/recovery/aster-A197-release.md)
+当前正式版为 **A236**。ARM32 已通过 WSA 用户验收。**不推荐 ARM64，优先使用 ARM32。** ARM64 为未运行验收的实验包。 [下载最新正式版](https://github.com/EndiVee233/PvZ2-Unline-Aster/releases/latest) · [A236 构建与验证](docs/recovery/aster-A236-release.md)
 
 ## Unline系列
 - PvZ2:Aster

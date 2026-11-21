@@ -32,7 +32,7 @@ def use_extraction_title_art(source):
  return source[:start]+body+source[end:]
 
 
-def rebuild_bootstrap(original, out, replacements, apktool, *, extraction_art=False):
+def rebuild_bootstrap(original, out, replacements, apktool, *, extraction_art=False, transform=None):
  out=Path(out);out.mkdir(parents=True,exist_ok=True)
  (out/'original.dex').write_bytes(original)
  subprocess.run(['javac','-cp',str(apktool),'-d',str(out),str(Path(__file__).with_name('RepairDex.java'))],check=True)
@@ -43,6 +43,7 @@ def rebuild_bootstrap(original, out, replacements, apktool, *, extraction_art=Fa
  for old in replacements:assert old in s,old
  s=re.sub('|'.join(re.escape(k) for k in replacements),lambda m:replacements[m[0]],s)
  if extraction_art:s=use_extraction_title_art(s)
+ if transform:s=transform(s)
  p.write_text(s,encoding='utf8')
  target=out/'classes8.dex'
  subprocess.run(['java','-Xmx256m','-cp',cp,'RepairDex','encode',str(out/'smali'),str(target)],check=True)

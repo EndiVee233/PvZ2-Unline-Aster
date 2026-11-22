@@ -2,7 +2,7 @@
 
 The A272 prerelease build inputs and command are in [A272 build and verification](docs/A272-prerelease.md).
 
-See the [A236 build inputs and verification](docs/recovery/aster-A236-release.md) for the current release. The [A197 host rebuild instructions](docs/recovery/aster-A197-release.md) are also available.
+See [A305 build inputs and verification](docs/A305-release.md) for the current release and [A236](docs/recovery/aster-A236-release.md) for the previous release. The [A197 host rebuild instructions](docs/recovery/aster-A197-release.md) are also available.
 
 These notes describe how the released APK was assembled. Paths in
 `src/boot/build_single.py` are absolute placeholders from the build machine;

@@ -1,0 +1,474 @@
+package com.popcap.pvz2cthd;
+
+import android.app.Activity;
+import android.content.Intent;
+import android.content.SharedPreferences;
+import android.net.Uri;
+import android.os.SystemClock;
+import android.util.AtomicFile;
+import android.util.Log;
+import android.widget.Toast;
+
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
+import org.json.JSONTokener;
+
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.URL;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.regex.Pattern;
+import javax.net.ssl.HttpsURLConnection;
+
+final class AdventureFriendFiles {
+    static final String EXPORT_EVENT = "aster-social-export";
+    static final int EXPORT_SIZE = 280;
+    static final int MAX_FRIENDS = 40;
+    private static final int SAVE_DOCUMENT = 20804;
+    private static final int MAX_EXPORT_BYTES = 12 * 1024 * 1024;
+    private static final int MAX_CATALOG_BYTES = 24 * 1024 * 1024;
+    static final int MAX_RUNS = 1280;
+    private static final long REFRESH_INTERVAL = 10 * 60 * 1000L;
+    private static final String FORMAT = "pvz2-aster-player";
+    private static final String REPOSITORY = "EndiVee233/PvZ2-Unline-Aster";
+    private static final String DIRECTORY = "adventure-friends";
+    private static final String CONTENTS = "https://api.github.com/repos/" + REPOSITORY
+            + "/contents/" + DIRECTORY + "?ref=main";
+    private static final String RAW = "https://raw.githubusercontent.com/" + REPOSITORY
+            + "/main/" + DIRECTORY + "/";
+    private static final String UUID_PATTERN = "[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}";
+    private static final Pattern PLAYER_FILE = Pattern.compile("player-" + UUID_PATTERN + "\\.json");
+    private static final ExecutorService EXPORTS = Executors.newSingleThreadExecutor();
+    private static final ExecutorService SYNC = Executors.newSingleThreadExecutor();
+    private static volatile JSONArray community = new JSONArray();
+    private static boolean loaded, exporting;
+    private static long nextRefresh;
+    private static Export pendingExport;
+
+    private AdventureFriendFiles() {}
+
+    private static final class Export {
+        final String id;
+        final byte[] data;
+
+        Export(String id, byte[] data) {
+            this.id = id;
+            this.data = data;
+        }
+    }
+
+    static byte[] read(InputStream in, int max) throws IOException {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        byte[] buffer = new byte[8192];
+        int size;
+        while ((size = in.read(buffer)) != -1) {
+            if (size > max - out.size()) throw new IOException("Friend file too large");
+            out.write(buffer, 0, size);
+        }
+        return out.toByteArray();
+    }
+
+    private static Object json(byte[] data) throws JSONException, IOException {
+        PvpPresetDocument.checkDepth(data);
+        JSONTokener input = new JSONTokener(new String(data, StandardCharsets.UTF_8));
+        Object value = input.nextValue();
+        if (input.nextClean() != 0) throw new IOException("Unexpected JSON content");
+        return value;
+    }
+
+    private static String identity(Activity activity, int owner) {
+        return activity.getSharedPreferences("adventure-share", 0).getString(Integer.toHexString(owner), "");
+    }
+
+    private static String exportIdentity(Activity activity, int owner) throws IOException {
+        String id = identity(activity, owner);
+        if (id.matches(UUID_PATTERN)) return id;
+        id = UUID.randomUUID().toString();
+        if (!activity.getSharedPreferences("adventure-share", 0).edit().putString(Integer.toHexString(owner), id).commit()) {
+            throw new IOException("Could not save public player ID");
+        }
+        return id;
+    }
+
+    static void export(Activity activity, byte[] raw, JSONObject levels) {
+        if (exporting || pendingExport != null) return;
+        exporting = true;
+        EXPORTS.execute(() -> {
+            try {
+                ByteBuffer header = ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN);
+                if (raw.length != EXPORT_SIZE || header.getInt() != 1) throw new IOException("Invalid export request");
+                int owner = header.getInt();
+                if (owner == -1) throw new IOException("Player not selected");
+                String id = exportIdentity(activity, owner);
+                byte[] data = createExport(raw, id, levels, new File(activity.getFilesDir(), "userdata"));
+                Export export = new Export(id, data);
+                SharedPreferences files = destinations(activity);
+                String destination = files.getString(id, "");
+                if (!destination.isEmpty()) {
+                    try {
+                        writeExport(activity, Uri.parse(destination), export);
+                        activity.runOnUiThread(() -> finishExport(activity, "已更新导出的玩家数据"));
+                        return;
+                    } catch (IOException | SecurityException unavailable) {
+                        files.edit().remove(id).apply();
+                    }
+                }
+                activity.runOnUiThread(() -> openDocument(activity, export));
+            } catch (IOException | JSONException | RuntimeException error) {
+                Log.w("AsterSocial", "Player export failed", error);
+                activity.runOnUiThread(() -> finishExport(activity, "导出玩家数据失败，请重试"));
+            }
+        });
+    }
+
+    static byte[] createExport(byte[] raw, String id, JSONObject levels, File records)
+            throws IOException, JSONException {
+        ByteBuffer header = ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN);
+        if (raw.length != EXPORT_SIZE || header.getInt() != 1 || !id.matches(UUID_PATTERN)) {
+            throw new IOException("Invalid profile export");
+        }
+        int owner = header.getInt();
+        int avatar = header.getInt();
+        if (owner == -1 || avatar < 0 || avatar > 5) throw new IOException("Invalid profile");
+        StringBuilder nickname = new StringBuilder();
+        for (int i = 0; i < 40; ++i) {
+            int code = header.getInt();
+            if (code == 0) break;
+            if (Character.isValidCodePoint(code) && !Character.isISOControl(code) && !(code >= 0xd800 && code <= 0xdfff)) {
+                nickname.appendCodePoint(code);
+            }
+        }
+        String name = PvpPresetDocument.validName(nickname.toString());
+        if (name.isEmpty()) name = "玩家";
+        JSONArray loans = new JSONArray();
+        for (int slot = 0; slot < 3; ++slot) {
+            int offset = 172 + slot * AdventureFormationRecord.CARD_SIZE;
+            if (raw[offset] == 0) continue;
+            int level = header.getInt(offset + 32);
+            String type = new String(raw, offset, AdventureFormationRecord.aliasLength(raw, offset), StandardCharsets.US_ASCII);
+            if (level < 1 || level > 4) throw new IOException("Invalid loan card");
+            loans.put(new JSONObject().put("type", type).put("level", level));
+        }
+
+        Map<Integer, String> aliases = new HashMap<>();
+        for (java.util.Iterator<String> it = levels.keys(); it.hasNext();) {
+            String alias = it.next();
+            aliases.put(levels.getJSONArray(alias).getInt(0), alias);
+        }
+        String prefix = String.format(java.util.Locale.ROOT, "adventure-%08x-", owner);
+        File[] files = records.listFiles((folder, file) -> file.startsWith(prefix) && file.endsWith(".run"));
+        if (files == null) throw new IOException("Could not list player records");
+        Arrays.sort(files, Comparator.comparing(File::getName));
+        JSONArray runs = new JSONArray();
+        for (File file : files) {
+            AdventureFormationRecord record;
+            try (FileInputStream stream = new FileInputStream(file)) {
+                record = AdventureFormationRecord.read(stream);
+            } catch (IOException invalid) {
+                continue;
+            }
+            String alias = aliases.get(record.day);
+            if (record.owner != owner || alias == null || !file.getName().equals(recordName(prefix, record))) continue;
+            JSONArray info = levels.getJSONArray(alias);
+            int stars = info.getInt(1);
+            if (record.stars > stars || (stars == 1 && record.stars != 1)) continue;
+            runs.put(encodeRecord(record, alias, info.getBoolean(2)));
+        }
+        JSONObject result = new JSONObject().put("format", FORMAT).put("version", 1)
+                .put("playerId", id).put("name", name).put("avatar", avatar)
+                .put("borrowPlants", loans).put("runs", runs);
+        byte[] encoded = (result.toString() + "\n").getBytes(StandardCharsets.UTF_8);
+        if (encoded.length > MAX_EXPORT_BYTES) throw new IOException("Export exceeds file limit");
+        return encoded;
+    }
+
+    private static String recordName(String prefix, AdventureFormationRecord record) {
+        String day = record.day <= 2 ? "0" + record.day : Integer.toHexString(record.day);
+        return prefix + day + "-" + record.stars + ".run";
+    }
+
+    private static JSONObject encodeRecord(AdventureFormationRecord run, String alias, boolean formation)
+            throws JSONException {
+        JSONObject entry = new JSONObject().put("level", alias).put("stars", run.stars).put("elapsedMs", run.elapsedMs);
+        JSONArray plants = new JSONArray();
+        if (formation) {
+            for (AdventureFormationRecord.Plant plant : run.plants) {
+                JSONObject item = new JSONObject().put("type", plant.type).put("column", plant.column + 1)
+                        .put("row", plant.row + 1).put("level", plant.level);
+                if (plant.avatar) item.put("avatar", true);
+                plants.put(item);
+            }
+            if (!run.cards.isEmpty()) {
+                JSONArray cards = new JSONArray();
+                for (AdventureFormationRecord.Card card : run.cards) {
+                    cards.put(card == null ? JSONObject.NULL : new JSONObject().put("type", card.type).put("level", card.level));
+                }
+                entry.put("cards", cards);
+            }
+        }
+        if (run.tacticalCukeUses >= 0) entry.put("tacticalCukeUses", run.tacticalCukeUses);
+        return entry.put("plants", plants);
+    }
+
+    private static SharedPreferences destinations(Activity activity) {
+        return activity.getSharedPreferences("adventure-export-destinations", 0);
+    }
+
+    private static void writeExport(Activity activity, Uri uri, Export export) throws IOException {
+        try (OutputStream out = activity.getContentResolver().openOutputStream(uri, "wt")) {
+            if (out == null) throw new IOException("Could not open export destination");
+            out.write(export.data);
+        }
+    }
+
+    private static void openDocument(Activity activity, Export export) {
+        exporting = false;
+        if (activity.isFinishing() || activity.isDestroyed()) return;
+        pendingExport = export;
+        Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
+                .setType("application/json").putExtra(Intent.EXTRA_TITLE, "player-" + export.id + ".json");
+        try {
+            activity.startActivityForResult(intent, SAVE_DOCUMENT);
+        } catch (RuntimeException error) {
+            pendingExport = null;
+            finishExport(activity, "系统文件选择器不可用");
+        }
+    }
+
+    static boolean onResult(Activity activity, int request, int result, Intent intent) {
+        if (request != SAVE_DOCUMENT) return false;
+        Export export = pendingExport;
+        pendingExport = null;
+        if (result != Activity.RESULT_OK || intent == null || intent.getData() == null) return true;
+        if (export == null) {
+            finishExport(activity, "请重新导出玩家数据");
+            return true;
+        }
+        exporting = true;
+        EXPORTS.execute(() -> {
+            String message;
+            Uri destination = intent.getData();
+            try {
+                writeExport(activity, destination, export);
+                try {
+                    activity.getContentResolver().takePersistableUriPermission(destination, Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+                    destinations(activity).edit().putString(export.id, destination.toString()).apply();
+                } catch (SecurityException ignored) {
+                    // Some providers grant access only for this save operation.
+                }
+                message = "已导出玩家数据，可提交到 GitHub 好友库";
+            } catch (IOException | RuntimeException error) {
+                Log.w("AsterSocial", "Could not save exported player data", error);
+                message = "无法保存玩家数据，请重试";
+            }
+            String text = message;
+            activity.runOnUiThread(() -> finishExport(activity, text));
+        });
+        return true;
+    }
+
+    private static void finishExport(Activity activity, String text) {
+        exporting = false;
+        if (!activity.isFinishing() && !activity.isDestroyed()) Toast.makeText(activity, text, Toast.LENGTH_LONG).show();
+    }
+
+    static JSONArray merge(Activity activity, int owner, JSONArray offline) throws JSONException {
+        JSONArray merged = new JSONArray();
+        Set<Integer> ids = new HashSet<>();
+        for (int i = 0; i < offline.length(); i++) {
+            JSONObject player = offline.getJSONObject(i);
+            ids.add(player.getInt("id"));
+            merged.put(player);
+        }
+        String ownId = identity(activity, owner);
+        JSONArray snapshot = community;
+        for (int i = 0; i < snapshot.length() && merged.length() < MAX_FRIENDS; i++) {
+            JSONObject player = snapshot.getJSONObject(i);
+            if (!ownId.equals(player.getString("playerId")) && ids.add(player.getInt("id"))) merged.put(player);
+        }
+        return merged;
+    }
+
+    static void refresh(Activity activity, JSONObject levels) {
+        long now = SystemClock.elapsedRealtime();
+        if (now < nextRefresh) return;
+        nextRefresh = now + REFRESH_INTERVAL;
+        AtomicFile cache = cache(activity);
+        SYNC.execute(() -> {
+            loadCache(cache);
+            try {
+                JSONArray updated = download(levels, community);
+                byte[] data = updated.toString().getBytes(StandardCharsets.UTF_8);
+                if (data.length > MAX_CATALOG_BYTES) throw new IOException("Community catalog exceeds its byte limit");
+                FileOutputStream out = cache.startWrite();
+                try {
+                    out.write(data);
+                    cache.finishWrite(out);
+                } catch (IOException error) {
+                    cache.failWrite(out);
+                    throw error;
+                }
+                community = updated;
+            } catch (IOException | JSONException | RuntimeException error) {
+                Log.i("AsterSocial", "Kept the previous GitHub friend list", error);
+            }
+        });
+    }
+
+    static void prepare(Activity activity) {
+        AtomicFile cache = cache(activity);
+        SYNC.execute(() -> loadCache(cache));
+    }
+
+    private static AtomicFile cache(Activity activity) {
+        return new AtomicFile(new File(activity.getCacheDir(), "adventure-community.json"));
+    }
+
+    private static void loadCache(AtomicFile cache) {
+        if (loaded) return;
+        loaded = true;
+        try (FileInputStream in = cache.openRead()) {
+            community = (JSONArray) json(read(in, MAX_CATALOG_BYTES));
+        } catch (IOException | JSONException | ClassCastException ignored) {
+            // The bundled friends are available before the first sync.
+        }
+    }
+
+    private static JSONArray download(JSONObject levels, JSONArray cached) throws IOException, JSONException {
+        Object response = json(fetch(CONTENTS, 2 * 1024 * 1024));
+        if (!(response instanceof JSONArray)) throw new IOException("Expected a GitHub directory");
+        JSONArray listing = (JSONArray) response;
+        Map<String, JSONObject> old = new HashMap<>();
+        for (int i = 0; i < cached.length(); ++i) {
+            JSONObject player = cached.getJSONObject(i);
+            old.put(player.getString("playerId"), player);
+        }
+        JSONArray updated = new JSONArray();
+        int size = 2;
+        for (int i = 0; i < listing.length() && updated.length() < MAX_FRIENDS; ++i) {
+            JSONObject row = listing.getJSONObject(i);
+            String name = row.optString("name");
+            String sha = row.optString("sha");
+            int bytes = row.optInt("size", -1);
+            if (!"file".equals(row.optString("type")) || !PLAYER_FILE.matcher(name).matches()
+                    || !sha.matches("[0-9a-f]{40}") || bytes < 1 || bytes > MAX_EXPORT_BYTES) continue;
+            String id = name.substring(7, name.length() - 5);
+            JSONObject player = old.get(id);
+            if (player == null || !sha.equals(player.optString("blob"))) {
+                byte[] data = fetch(RAW + name, MAX_EXPORT_BYTES);
+                if (data.length != bytes || !sha.equals(blobSha(data))) throw new IOException("GitHub file changed during sync");
+                try {
+                    player = parsePlayer(data, id, levels).put("blob", sha);
+                } catch (IOException | JSONException invalid) {
+                    Log.i("AsterSocial", "Skipped invalid community profile " + name);
+                    continue;
+                }
+            }
+            if (size + bytes + 128 > MAX_CATALOG_BYTES) continue;
+            size += bytes + 128;
+            updated.put(player);
+        }
+        return updated;
+    }
+
+    static JSONObject parsePlayer(byte[] raw, String id, JSONObject levels) throws IOException, JSONException {
+        Object value = json(raw);
+        if (!(value instanceof JSONObject)) throw new IOException("Expected one player per file");
+        JSONObject player = (JSONObject) value;
+        if (!id.matches(UUID_PATTERN) || !id.equals(player.get("playerId")) || !FORMAT.equals(player.get("format"))) {
+            throw new IOException("Player ID or file format mismatch");
+        }
+        AdventureSocial.integer(player, "version", 1, 1);
+        if (!(player.get("name") instanceof String)) throw new IOException("Invalid nickname");
+        String name = PvpPresetDocument.validName(player.getString("name"));
+        if (name.isEmpty()) throw new IOException("Empty nickname");
+        int avatar = AdventureSocial.integer(player, "avatar", 0, 5);
+        JSONArray rawLoans = player.getJSONArray("borrowPlants");
+        if (rawLoans.length() > 3) throw new IOException("Too many loan plants");
+        JSONArray loans = new JSONArray();
+        Set<String> loanTypes = new HashSet<>();
+        for (int i = 0; i < rawLoans.length(); ++i) {
+            JSONObject loan = rawLoans.getJSONObject(i);
+            String type = AdventureSocial.plantType(loan);
+            if (!loanTypes.add(type)) throw new IOException("Duplicate loan plant");
+            loans.put(new JSONObject().put("type", type).put("level", AdventureSocial.integer(loan, "level", 1, 4)));
+        }
+        // The game protocol needs an integer ID. Derive a stable value from the public UUID.
+        int friend = ByteBuffer.wrap(digest("SHA-256").digest(id.getBytes(StandardCharsets.US_ASCII))).getInt()
+                & 0x3fffffff | 0x40000000;
+        JSONArray rawRuns = player.getJSONArray("runs");
+        if (rawRuns.length() > MAX_RUNS) throw new IOException("Too many player records");
+        JSONArray runs = new JSONArray();
+        Set<Long> seen = new HashSet<>();
+        for (int i = 0; i < rawRuns.length(); ++i) {
+            JSONObject run = rawRuns.getJSONObject(i);
+            String alias = run.getString("level");
+            JSONArray info = levels.optJSONArray(alias);
+            if (info == null) continue;
+            int key = info.getInt(0);
+            int tiers = info.getInt(1);
+            int stars = AdventureSocial.integer(run, "stars", tiers == 1 ? 1 : 0, tiers);
+            if (!seen.add(((long) key << 2) | stars)) throw new IOException("Duplicate community record");
+            boolean formation = info.getBoolean(2);
+            byte[] record = AdventureSocial.encodeRun(run, friend, key, stars, formation);
+            AdventureFormationRecord validated = AdventureFormationRecord.read(new java.io.ByteArrayInputStream(record));
+            runs.put(encodeRecord(validated, alias, formation));
+        }
+        return new JSONObject().put("id", friend).put("playerId", id).put("name", name).put("avatar", avatar)
+                .put("borrowPlants", loans).put("runs", runs);
+    }
+
+    private static byte[] fetch(String address, int limit) throws IOException {
+        HttpsURLConnection connection = (HttpsURLConnection) new URL(address).openConnection();
+        connection.setConnectTimeout(4500);
+        connection.setReadTimeout(6000);
+        connection.setInstanceFollowRedirects(false);
+        connection.setRequestProperty("User-Agent", "PvZ2-Unline-Aster");
+        try {
+            if (connection.getResponseCode() != 200) throw new IOException("GitHub HTTP " + connection.getResponseCode());
+            try (InputStream in = connection.getInputStream()) {
+                return read(in, limit);
+            }
+        } finally {
+            connection.disconnect();
+        }
+    }
+
+    private static String blobSha(byte[] bytes) {
+        MessageDigest hash = digest("SHA-1");
+        hash.update(("blob " + bytes.length + "\0").getBytes(StandardCharsets.US_ASCII));
+        StringBuilder hex = new StringBuilder(40);
+        for (byte b : hash.digest(bytes)) {
+            hex.append(Character.forDigit((b & 0xff) >>> 4, 16)).append(Character.forDigit(b & 15, 16));
+        }
+        return hex.toString();
+    }
+
+    private static MessageDigest digest(String algorithm) {
+        try {
+            return MessageDigest.getInstance(algorithm);
+        } catch (NoSuchAlgorithmException unavailable) {
+            throw new AssertionError(unavailable);
+        }
+    }
+}

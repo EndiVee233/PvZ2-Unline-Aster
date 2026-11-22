@@ -23,12 +23,13 @@ struct SocialSession {
     bool failed;
     bool backRequested;
     Object viewBack;
-    char32_t viewTitle[64];
+    Object viewBank;
+    char32_t viewTitle[88];
     char stage[64];
 };
 
 static SocialSession social;
-static Record friendRecord;
+static Record viewRecord;
 static Word sequence;
 
 struct ChallengeChoice {
@@ -55,8 +56,10 @@ static void releaseString(Word base, const char* value) {
 
 }
 
+#include "friend_avatars.h"
 #include "level_menu.h"
 #include "formation_view.h"
+#include "social_settings.h"
 
 namespace {
 static void startStockLevel(Word base) {
@@ -64,7 +67,7 @@ static void startStockLevel(Word base) {
     const char* stage = nullptr;
     const char* alias = nullptr;
     native<void>(base, 0x14ed0e1, &stage, social.stage, &allocator);
-    native<void>(base, 0x14ed0e1, &alias, social.id.day == 1 ? "egypt1" : "egypt2", &allocator);
+    native<void>(base, 0x14ed0e1, &alias, menu.level->alias, &allocator);
     native<void>(base, 0x354360, social.scene, &stage, &alias, social.seed, social.transition, social.flags);
     releaseString(base, alias);
     releaseString(base, stage);
@@ -81,6 +84,7 @@ static void returnToMap(Word base, bool failed) {
         native<void>(base, 0x226770, board);
     }
     social.viewBack = nullptr;
+    social.viewBank = nullptr;
     social.backRequested = false;
     social.viewTitle[0] = 0;
     native<void>(base, 0x352498, social.scene, social.previousScene, 0U, 1U);
@@ -105,18 +109,18 @@ static bool readReply(Word base, SocialMessage& reply) {
     Word count = 0;
     if (valid && reply.kind == Word(SocialCommand::Watch)) {
         const auto& score = menu.scores[menu.watch ? menu.watch - chooseFriend : 0];
-        valid = social.phase == SocialPhase::Choosing && menu.watch &&
-            readExact(base, fd, &friendRecord, sizeof(friendRecord)) &&
-            AdventureRecords::valid(friendRecord, friendRecord.owner, social.id.day, menu.stars) &&
-            friendRecord.elapsedMs == score.elapsedMs;
+        valid = social.phase == SocialPhase::Choosing && menu.level->formation && menu.watch &&
+            readRecord(base, fd, score.id, social.id.day, menu.stars, viewRecord) &&
+            viewRecord.elapsedMs == score.elapsedMs;
     } else if (valid && reply.kind == Word(SocialCommand::Scores)) {
         valid = social.phase == SocialPhase::Choosing && !menu.scoreCount &&
             readExact(base, fd, &count, sizeof(count)) && count <= maxFriendScores &&
             readExact(base, fd, menu.scores, count * sizeof(FriendScore));
         for (Word i = 0; valid && i < count; ++i) {
             const auto& row = menu.scores[i];
-            valid = row.stars < 4 && row.elapsedMs > 0 && row.elapsedMs <= 3600000 &&
-                row.name[0] && !row.name[39];
+            valid = row.id > 0 && row.id <= 0x7fffffff && row.stars < 4 &&
+                row.elapsedMs > 0 && row.elapsedMs <= 3600000 &&
+                validFriendAvatar(row.avatar) && row.name[0] && !row.name[39];
         }
     } else {
         valid = valid && reply.kind == Word(SocialCommand::Back);
@@ -130,36 +134,51 @@ static bool readReply(Word base, SocialMessage& reply) {
 }
 }
 
+#include "friend_sun.h"
+#include "borrow_plant.h"
+#include "user_dialog.h"
+
 extern "C" void asterAdventureChoose(Word base, Object scene, const char* const* stage,
                                      const char* const* alias, Word seed, Word transition, Word flags) {
+    if (!socialContentEnabled(base)) {
+        native<void>(base, 0x354360, scene, stage, alias, seed, transition, flags);
+        return;
+    }
     // The map's level nodes also receive touches through the scene dispatcher.
     if (social.phase == SocialPhase::Choosing && scene == social.scene &&
         field<Word>(scene, 0x984) == social.previousScene) return;
-    const Word day = alias ? AdventureRecords::egyptDay(*alias) : 0;
+    const auto* level = alias ? AdventureRecords::findLevel(*alias) : nullptr;
     const Word player = owner(ownerStore(base));
     const Word previous = field<Word>(scene, 0x984);
     const char* name = stage ? *stage : nullptr;
     Object app = gameApp(base);
-    if (day && app && !field<Object>(app, 0x1370) && !field<Word>(app, 0x1374) && player != ~0U && previous && previous != 6 && previous < 128 && name &&
+    if (level && app && !field<Object>(app, 0x1370) && !field<Word>(app, 0x1374) && player != ~0U && previous && previous != 6 && previous < 128 && name &&
         social.phase == SocialPhase::Idle) {
         Word size = 0;
         while (size < sizeof(social.stage) && name[size]) ++size;
         if (size < sizeof(social.stage)) {
             const Word clock = wallTime(base);
-            SocialMessage id{clock + ++sequence, player, day, 0};
             social.scene = scene;
+            menu.unlocked = starChallengesUnlocked(base, *level, &menu.earnedStars);
+            if (level->stars > 1 && !menu.unlocked) {
+                selectedChallenge = {player, level->key, 0, clock + 2000U, false};
+                native<void>(base, 0x354360, scene, stage, alias, seed, transition, flags);
+                return;
+            }
             social.board = nullptr;
             social.previousScene = previous;
             social.seed = seed;
             social.transition = transition;
             social.flags = flags;
-            social.id = id;
+            social.id = {clock + ++sequence, player, level->key, 0};
             social.expires = clock + 60000U;
             social.lastPoll = clock - 10U;
             social.phase = SocialPhase::Choosing;
             social.failed = false;
             selectedChallenge.day = 0;
-            menu.action = menu.stars = menu.page = menu.watch = menu.scoreCount = menu.chosenFriend = 0;
+            menu.level = level;
+            menu.stars = level->stars == 1 ? 1 : 0;
+            menu.action = menu.page = menu.watch = menu.scoreCount = menu.selectedScore = 0;
             for (Word i = 0; i <= size; ++i) social.stage[i] = name[i];
             native<int>(base, 0x148424, replyFile);
             publish(base, Word(SocialEvent::Select));
@@ -177,15 +196,23 @@ static void endMenu(Word base, Word event = 0) {
     social.phase = SocialPhase::Idle;
 }
 
+static void openFormation(Word base, const char32_t* name, Word clock) {
+    prepareFormationTitle(name, viewRecord.elapsedMs);
+    closeMenu(base);
+    menu.watch = 0;
+    social.phase = SocialPhase::Loading;
+    social.expires = clock + 2000U;
+    startStockLevel(base);
+}
+
 // Process input on the renderer outside the widget's mouse-up callback.
 static void updateMenu(Word base, Word clock) {
     if (!menu.dialog) {
-        menu.unlocked = starChallengesUnlocked(base, social.id.day, &menu.earnedStars);
         for (Word i = 0; i < 4; ++i) {
             menu.bestTimes[i] = asterAdventureBest(base, social.id.day, i, &menuBest)
                 ? menuBest.elapsedMs : 0;
         }
-        if (!showMenu(base, social.id.day)) endMenu(base);
+        if (!showMenu(base)) endMenu(base);
         return;
     }
     Object app = gameApp(base);
@@ -202,9 +229,9 @@ static void updateMenu(Word base, Word clock) {
         return;
     }
     if (action == Enter) {
-        if (menu.stars && !starChallengesUnlocked(base, social.id.day)) {
+        if (menu.stars && !starChallengesUnlocked(base, *menu.level)) {
             menu.unlocked = false;
-            if (!showMenu(base, social.id.day)) endMenu(base);
+            if (!showMenu(base)) endMenu(base);
             return;
         }
         endMenu(base);
@@ -212,30 +239,47 @@ static void updateMenu(Word base, Word clock) {
         startStockLevel(base);
         return;
     }
-    if (action == WatchFriend) {
-        if (menu.chosenFriend && publish(base, menu.chosenFriend)) {
-            menu.watch = menu.chosenFriend;
+    if (action == WatchFormation) {
+        if (!menu.level->formation) return;
+        if (menu.selectedScore == chooseSelf) {
+            Word time = asterAdventureBest(base, social.id.day, menu.stars, &viewRecord)
+                ? viewRecord.elapsedMs : 0;
+            if (time && time == menu.bestTimes[menu.stars]) {
+                openFormation(base, selfName, clock);
+            } else {
+                menu.bestTimes[menu.stars] = time;
+                menu.page = menu.selectedScore = 0;
+                if (!showMenu(base)) endMenu(base);
+            }
+        } else if (menu.selectedScore && publish(base, menu.selectedScore)) {
+            menu.watch = menu.selectedScore;
             social.expires = clock + 1000U;
         }
         return;
     }
-    if (action >= chooseFriend && action - chooseFriend < menu.scoreCount) {
-        menu.chosenFriend = action;
-    } else if (action >= SelectStars && action < SelectStars + 4) {
+    if ((action == chooseSelf && menu.bestTimes[menu.stars]) ||
+        (action >= chooseFriend && action - chooseFriend < menu.scoreCount)) {
+        menu.selectedScore = action;
+    } else if (action >= SelectStars + Word(menu.level->stars == 1) &&
+               action <= SelectStars + menu.level->stars) {
         menu.stars = action - SelectStars;
-        menu.page = menu.chosenFriend = 0;
+        menu.page = menu.selectedScore = 0;
     } else if (action == PrevPage && menu.page) {
         --menu.page;
-        menu.chosenFriend = 0;
+        menu.selectedScore = 0;
     } else if (action == NextPage) {
         ++menu.page;
-        menu.chosenFriend = 0;
+        menu.selectedScore = 0;
     }
-    if (!showMenu(base, social.id.day)) endMenu(base);
+    if (!showMenu(base)) endMenu(base);
 }
 }
 
 extern "C" void asterAdventureSocialFrame(Word base) {
+    updateUserDialog(base);
+    updateFriendSun(base);
+    updateBorrowChooser(base);
+    updateAdventureClockHud(base);
     // Restart can create a new Board in the same scene. Keep the selected
     // tier through that transition, and retire it on leaving the battle.
     if (selectedChallenge.day && selectedChallenge.applied &&
@@ -285,7 +329,7 @@ extern "C" void asterAdventureSocialFrame(Word base) {
     }
     if (social.phase == SocialPhase::Choosing) {
         updateMenu(base, clock);
-        if (social.phase == SocialPhase::Idle) return;
+        if (social.phase != SocialPhase::Choosing) return;
     }
     if (clock - social.lastPoll < 10U) return;
     social.lastPoll = clock;
@@ -294,14 +338,12 @@ extern "C" void asterAdventureSocialFrame(Word base) {
     auto command = static_cast<SocialCommand>(reply.kind);
     if (social.phase == SocialPhase::Choosing) {
         if (command == SocialCommand::Scores) {
-            if (!menu.watch && menu.scoreCount && !showMenu(base, social.id.day)) endMenu(base);
+            if (!menu.watch && menu.scoreCount) {
+                menu.selectedScore = 0;
+                if (!showMenu(base)) endMenu(base);
+            }
         } else if (command == SocialCommand::Watch) {
-            prepareFormationTitle(menu.scores[menu.watch - chooseFriend].name, friendRecord.elapsedMs);
-            closeMenu(base);
-            menu.watch = 0;
-            social.phase = SocialPhase::Loading;
-            social.expires = clock + 2000U;
-            startStockLevel(base);
+            openFormation(base, menu.scores[menu.watch - chooseFriend].name, clock);
         } else if (command == SocialCommand::Back && menu.watch) {
             menu.watch = 0;
             social.expires = clock + 60000U;
@@ -312,8 +354,9 @@ extern "C" void asterAdventureSocialFrame(Word base) {
 }
 
 extern "C" void asterAdventureViewLoaded(Word base, Object board) {
+    resetBorrowChoice(base);
     if (social.phase != SocialPhase::Loading || !board || board != gameBoard(base)) return;
-    if (AdventureRecords::egyptDay(field<const char*>(board, 0xc4)) != social.id.day) return;
+    if (AdventureRecords::levelId(field<const char*>(board, 0xc4)) != social.id.day) return;
     // These are transient Board fields. Normal play keeps its selected
     // challenge and the owning player's unlock and reward records.
     field<int>(board, 0x7f0) = -1;
@@ -323,12 +366,14 @@ extern "C" void asterAdventureViewLoaded(Word base, Object board) {
 
 extern "C" bool asterAdventureSelectChallenge(Word base, Object board, Object properties) {
     if (!board || board != gameBoard(base)) return false;
-    Word day = AdventureRecords::egyptDay(field<const char*>(board, 0xc4));
-    if (!day) return false;
+    const auto* level = AdventureRecords::findLevel(field<const char*>(board, 0xc4));
+    if (!level) return false;
+    const Word day = level->key;
     int index = -1;
     if (social.phase != SocialPhase::Loading || day != social.id.day) {
         const auto choice = selectedChallenge;
-        if (!properties || day != choice.day || choice.owner != owner(ownerStore(base)) ||
+        if (!properties || day != choice.day || choice.stars > level->stars ||
+            choice.owner != owner(ownerStore(base)) ||
             (!choice.applied && static_cast<int>(wallTime(base) - choice.expires) >= 0)) return false;
         if (choice.stars) {
             const Word first = field<Word>(properties, 0x1c);
@@ -339,7 +384,7 @@ extern "C" bool asterAdventureSelectChallenge(Word base, Object board, Object pr
         selectedChallenge.applied = true;
         native<int>(base, 0x147adc, 4, "AsterSocial", "play day=%u stars=%u", day, choice.stars);
     }
-    if (index < 0) field<unsigned char>(board, 0x8a0) = 0;
+    field<unsigned char>(board, 0x8a0) = index >= 0;
     field<int>(board, 0x7f0) = index;
     return true;
 }
@@ -349,19 +394,25 @@ extern "C" bool asterAdventureSelectedStarModule(Word base) {
     if (!choice.applied || !choice.day || !choice.stars || choice.stars > 3 ||
         choice.owner != owner(ownerStore(base))) return false;
     Object board = gameBoard(base);
-    return board && AdventureRecords::egyptDay(field<const char*>(board, 0xc4)) == choice.day &&
+    return board && AdventureRecords::levelId(field<const char*>(board, 0xc4)) == choice.day &&
         field<int>(board, 0x7f0) == int(choice.stars) - 1;
 }
 
+extern "C" bool asterAdventureSelectedStarDescriptions(Word base, const char* const* alias) {
+    return alias && asterAdventureSelectedStarModule(base) &&
+        AdventureRecords::levelId(*alias) == selectedChallenge.day;
+}
+
 static int challengeDialogStars(Word base, Word count, Word index, Word mode) {
-    if (count != 3 || index >= 3 || mode < 1 || mode > 3) return -1;
+    if (count != 3 || index >= 3 || mode < 1 || mode > 3 || !socialContentEnabled(base)) return -1;
     Object board = gameBoard(base);
     if (!board || field<Word>(board, 0x7f0) != index) return -1;
     const auto* alias = &field<const char*>(board, 0xc4);
-    if (!AdventureRecords::egyptDay(*alias)) return -1;
+    const auto* level = AdventureRecords::findLevel(*alias);
+    if (!level || level->stars != count) return -1;
     Object store = ownerStore(base);
     Object profile = store ? native<Object>(base, 0x7a98dc, store) : nullptr;
-    return profile ? int(earnedStars(base, profile, alias)) : -1;
+    return profile ? int(earnedStars(base, profile, alias, count)) : -1;
 }
 
 extern "C" bool asterAdventureAllStarsTitle(Word base, Object page) {
@@ -390,14 +441,20 @@ extern "C" bool asterAdventureEnterView(Word base, Object board, Word nextPhase)
     }
     social.phase = SocialPhase::Viewing;
     native<void>(base, 0x224554, board, nextPhase);
+    // Last Stand clears this Board flag during setup. The native Plant::Update
+    // gate skips actions such as sun production while still updating idle poses.
+    auto& plantActions = field<unsigned char>(board, plantActionsEnabled);
+    plantActions = 0;
     Object registry = native<Object>(base, 0x11d74b4);
     Object names = field<Object>(reinterpret_cast<Object>(base), 0x183049c);
     if (!registry || !names || field<Word>(board, 0xb4) != 9 || field<Word>(board, 0xb8) != 5) {
         social.failed = true;
         return true;
     }
-    for (Word i = 0; i < friendRecord.count; ++i) {
-        const Plant& item = friendRecord.plants[i];
+    for (Word i = 0; i < viewRecord.count; ++i) {
+        const Plant& item = viewRecord.plants[i];
+        // The last four pirate columns are open water on rows without a plank.
+        if (item.column >= 5 && !(menu.level->plankRows & (1U << item.row))) continue;
         const char* alias = nullptr;
         char allocator = 0;
         WeakRef type;
@@ -418,7 +475,8 @@ extern "C" bool asterAdventureEnterView(Word base, Object board, Word nextPhase)
     // Phase 4 allows the normal HUD hit test. This preview skips the
     // chooser and keeps the battle entry guarded for its entire lifetime.
     native<void>(base, 0x224554, board, 4U);
-    native<int>(base, 0x147adc, 4, "AsterSocial", "view day=%u plants=%u", social.id.day, friendRecord.count);
+    plantActions = 0;
+    native<int>(base, 0x147adc, 4, "AsterSocial", "view day=%u plants=%u", social.id.day, viewRecord.count);
     social.expires = wallTime(base) + 360000U;
     social.failed = !showFormationHud(base, board);
     return true;

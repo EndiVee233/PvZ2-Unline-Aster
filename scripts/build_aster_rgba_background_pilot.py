@@ -29,9 +29,9 @@ def group_list(data):
                                  h['rsgp_Number'], h['rsgpInfo_EachLength'])
 
 
-def create_plan(original, output):
+def create_plan(original, output, *, rgba_atlases=0):
     baked = output / 'dynamic-rgba.reference'
-    assert bake(BytesIO(original), baked) == (2, 0)
+    assert bake(BytesIO(original), baked) == (2 + rgba_atlases, 0)
     target = baked.read_bytes()
     instructions = []
     reconstructed = sha256()

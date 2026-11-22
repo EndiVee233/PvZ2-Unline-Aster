@@ -2,7 +2,7 @@
 
 ## 正式版下载
 
-当前正式版为 **A236**。ARM32 已通过 WSA 用户验收。**不推荐 ARM64，优先使用 ARM32。** ARM64 为未运行验收的实验包。 [下载最新正式版](https://github.com/EndiVee233/PvZ2-Unline-Aster/releases/latest) · [A236 构建与验证](docs/recovery/aster-A236-release.md)
+当前正式版为 **A305**。ARM32 已在 WSA 验收阳光炸弹和 PVP 能量豆修复相关流程。**不推荐 ARM64，优先使用 ARM32。** ARM64 未做设备验收。 [下载最新正式版](https://github.com/EndiVee233/PvZ2-Unline-Aster/releases/latest) · [A305 说明](docs/A305-release.md)
 
 ## A272 预发布
 

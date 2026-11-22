@@ -191,7 +191,7 @@ def rebuild_content(source, reference, out, baseline, shim):
     return split_archive(archive_path, out), baseline, shim
 
 
-def rebuild_dynamic_bootstrap(dex, output, dynamic, updated_dynamic):
+def rebuild_dynamic_bootstrap(dex, output, dynamic, updated_dynamic, *, transform=None):
     old_hash, new_hash = sha256(dynamic).hexdigest(), sha256(updated_dynamic).hexdigest()
     literals = {old_hash: new_hash}
     if len(dynamic) != len(updated_dynamic):
@@ -200,7 +200,7 @@ def rebuild_dynamic_bootstrap(dex, output, dynamic, updated_dynamic):
     def allow_previous(smali):
         marker = ".method private static isSupportedResourcePredecessor(Ljava/lang/String;)Z\n    .registers 2\n"
         assert smali.count(marker) == 1
-        return smali.replace(marker, marker + f"""
+        patched = smali.replace(marker, marker + f"""
     const-string v0, "{old_hash}"
     invoke-virtual {{v0, p0}}, Ljava/lang/String;->equals(Ljava/lang/Object;)Z
     move-result v0
@@ -209,6 +209,7 @@ def rebuild_dynamic_bootstrap(dex, output, dynamic, updated_dynamic):
     return v0
     :prior_resource_checks
 """)
+        return transform(patched) if transform else patched
     return rebuild_bootstrap(dex, output, literals, ROOT.parent / "tools/apktool.jar",
                              transform=allow_previous)
 

@@ -1,15 +1,23 @@
 #pragma once
 
 namespace {
+static bool drawBorrowDialogPanel(Word base, Object dialog, Object graphics, const struct MenuRect* bounds);
+static void drawBorrowDialogContents(Word base, Object dialog, Object graphics);
+static void drawUserDialog(Word base, Object dialog, Object graphics);
+static bool userDrawsOwnFrame(Object dialog);
 struct FriendScore {
+    Word id;
     Word stars;
     Word elapsedMs;
+    Word avatar;
     char32_t name[40];
 };
 
 constexpr Word maxFriendScores = 160;
 constexpr Word scoresPerPage = 3;
 constexpr Word chooseFriend = 0x100;
+constexpr Word chooseSelf = chooseFriend + maxFriendScores;
+constexpr char32_t selfName[] = U"我";
 
 struct MenuRect { int x, y, width, height; };
 struct MenuColor { int red, green, blue, alpha; };
@@ -22,19 +30,29 @@ struct ButtonSkin {
 
 enum MenuArt : Word {
     Ribbon, Close, ClosePressed, InactiveTab, ActiveTab, GoalsCard,
-    StarOff, StarOn, LockedTab, LockedTabPressed, ViewButton, ViewButtonPressed, MenuArtCount
+    StarOff, StarOn, LockedTab, LockedTabPressed, ViewButton, ViewButtonPressed,
+#ifdef ASTER_SOCIAL_ART
+    ScorePaper, SocialTab, SocialTabSelected, SocialTabLocked,
+    GoalLineLeft, GoalLineRight, FriendRow, FriendAvatar, FriendHover,
+    FriendPortrait,
+    CommunityPortrait = FriendPortrait + friendAvatarCount,
+    MenuArtCount = CommunityPortrait + friendAvatarCount
+#else
+    MenuArtCount
+#endif
 };
 static ButtonSkin menuArt[MenuArtCount];
-static constexpr char menuGroups[][16] = {"UI_AwardDialog", "UI_GameIntro"};
+static constexpr char menuGroups[][16] = {"UI_AwardDialog", "UI_GameIntro", "UI_AsterSocial"};
 static Word heldMenuGroups;
 
 struct LevelMenu {
     Object dialog;
+    const AdventureRecords::LevelInfo* level;
     Word action;
     Word stars;
     Word page;
     Word watch;
-    Word chosenFriend;
+    Word selectedScore;
     Word earnedStars;
     bool unlocked;
     Word bestTimes[4];
@@ -43,6 +61,7 @@ struct LevelMenu {
     struct ScoreRow {
         Object widget;
         bool selected;
+        Word friendId, avatar;
         const char32_t* player;
         const char32_t* time;
     } scoreRows[scoresPerPage];
@@ -58,12 +77,7 @@ struct LevelMenu {
 static LevelMenu menu;
 static Record menuBest;
 
-enum MenuAction : Word { Dismiss = 1, Enter, PrevPage, NextPage, WatchFriend, SelectStars = 16 };
-
-static Object gameApp(Word base) {
-    Object holder = field<Object>(reinterpret_cast<Object>(base), 0x1821674);
-    return holder ? field<Object>(holder, 0) : nullptr;
-}
+enum MenuAction : Word { Dismiss = 1, Enter, PrevPage, NextPage, WatchFormation, SelectStars = 16 };
 
 template<class... Args> static void widgetCall(Object widget, Word slot, Args... args) {
     auto method = field<Word>(field<Object>(widget, 0), slot);
@@ -84,6 +98,55 @@ static void freeText(Word base, const char32_t*& value) {
     char allocator = 0;
     native<void>(base, 0x14ea239, value - 3, &allocator);
     value = nullptr;
+}
+
+static Object openGameDialog(Word base, Object app, int designWidth, int designHeight, int gutter,
+                             bool keepAspect = false) {
+    if (!app || field<Object>(app, 0x1370) || field<Word>(app, 0x1374)) return nullptr;
+    const float scale = field<float>(app, 0x698);
+    const float maxWidth = float(field<int>(app, 0x524)) * 0.92f;
+    const float maxHeight = float(field<int>(app, 0x528)) * 0.92f;
+    if (!(scale > 0) || maxWidth <= 0 || maxHeight <= 0) return nullptr;
+    float width = designWidth * scale < maxWidth ? designWidth * scale : maxWidth;
+    float height = designHeight * scale < maxHeight ? designHeight * scale : maxHeight;
+    if (keepAspect) {
+        const float uniformScale = width / designWidth < height / designHeight
+            ? width / designWidth : height / designHeight;
+        width = designWidth * uniformScale;
+        height = designHeight * uniformScale;
+    }
+    Object dialog = native<Object>(base, 0x14c1a7d, 0x170U);
+    if (!dialog) return nullptr;
+    native<void>(base, 0x7f1b6c, dialog);
+    field<unsigned char>(dialog, 0xcd) = 1;
+    field<float>(dialog, 0xd0) = 0.5f;
+    const float y = (field<int>(app, 0x528) - height - height * gutter / designHeight) * 0.5f;
+    widgetCall(dialog, 0xac, int((field<int>(app, 0x524) - width) * 0.5f),
+               y > 0 ? int(y) : 0, int(width), int(height));
+    Object manager = field<Object>(app, 0x2c0);
+    widgetCall(manager, 0x10, dialog);
+    widgetCall(manager, 0x38, dialog);
+    native<void>(base, 0x1317158, manager, dialog);
+    widgetCall(manager, 0x2c, dialog);
+    return dialog;
+}
+
+static void detachGameDialog(Word base, Object app, Object dialog) {
+    Object manager = field<Object>(app, 0x2c0);
+    widgetCall(manager, 0x14, dialog);
+    native<void>(base, 0x1317170, manager, dialog);
+    widgetCall(app, 0xa8, dialog);
+}
+
+static Object createDialogButton(Word base, Object dialog, const char32_t* label,
+                                 void (*callback)(Word), Word action, bool highlighted) {
+    const char32_t* text = nullptr;
+    makeText(base, text, label);
+    Word delegate[6] = {base + 0x1787408, reinterpret_cast<Word>(callback),
+                        0, action, 1, base + 0x2cc954};
+    Object button = native<Object>(base, 0x7f25ec, dialog, &text, delegate, highlighted ? 0 : 1);
+    freeText(base, text);
+    return button;
 }
 
 static char32_t* append(char32_t* out, const char32_t* text, Word limit = 128) {
@@ -134,11 +197,8 @@ static void changeMenuGroup(Word base, Object app, Word index, bool load) {
 static void closeMenu(Word base) {
     Object app = gameApp(base);
     if (app && menu.dialog) {
-        Object manager = field<Object>(app, 0x2c0);
-        widgetCall(manager, 0x14, menu.dialog);
-        native<void>(base, 0x1317170, manager, menu.dialog);
-        widgetCall(app, 0xa8, menu.dialog);
-        for (Word i = 0; i < 2; ++i) {
+        detachGameDialog(base, app, menu.dialog);
+        for (Word i = 0; i < sizeof(menuGroups) / sizeof(menuGroups[0]); ++i) {
             if (heldMenuGroups & (1U << i)) changeMenuGroup(base, app, i, false);
         }
     }
@@ -152,6 +212,15 @@ static void queueMenuAction(Word action) {
     if (menu.dialog && !menu.action && !menu.watch) menu.action = action;
 }
 
+static void resolveMenuSkin(Word base, ButtonSkin& skin, const char* key, Word drawMode) {
+    struct ImageDescriptor { Word reserved[3]; const char* key; WeakRef ref; };
+    ImageDescriptor descriptor;
+    descriptor.key = key;
+    descriptor.ref = {0, 0};
+    native<void>(base, 0x7e8a28, &skin, &descriptor, drawMode);
+    native<void>(base, 0x1d9bb4, &descriptor.ref, 0U, 0U, 0U);
+}
+
 static void loadMenuArt(Word base, Object app) {
     static constexpr char keys[][50] = {
         "IMAGE_UI_AWARDDIALOG_RIBBON",
@@ -160,21 +229,32 @@ static void loadMenuArt(Word base, Object app) {
         "IMAGE_UI_GAME_INTRO_GAME_INTRO_DIALOG",
         "IMAGE_UI_STAR_REWARD_STAR_REWARD_152X148", "IMAGE_UI_STAR_REWARD_STAR_REWARD_141X137",
         "IMAGE_UI_AWARDDIALOG_RATING_GREY_BTN", "IMAGE_UI_AWARDDIALOG_RATING_GREY_BTN_DOWN",
-        "IMAGE_UI_GENERIC_GREENBUTTON", "IMAGE_UI_GENERIC_GREENBUTTON_DOWN"
+        "IMAGE_UI_GENERIC_GREENBUTTON", "IMAGE_UI_GENERIC_GREENBUTTON_DOWN",
+#ifdef ASTER_SOCIAL_ART
+        "IMAGE_ASTER_SOCIAL_SCORE_PAPER", "IMAGE_ASTER_SOCIAL_TAB_NORMAL",
+        "IMAGE_ASTER_SOCIAL_TAB_SELECTED", "IMAGE_ASTER_SOCIAL_TAB_LOCKED",
+        "IMAGE_ASTER_SOCIAL_LINE_LEFT", "IMAGE_ASTER_SOCIAL_LINE_RIGHT",
+        "IMAGE_ASTER_SOCIAL_FRIEND_ROW", "IMAGE_ASTER_SOCIAL_FRIEND_AVATAR", "IMAGE_ASTER_SOCIAL_FRIEND_HOVER",
+#endif
     };
     if (!field<Object>(reinterpret_cast<Object>(base), 0x183607c)) return;
     auto resolve = [&](Word i) {
         // The stock button-skin factory resolves the image by name. Footer
         // buttons use the same fixed corners and resizable middle as Pause.
-        struct ImageDescriptor { Word reserved[3]; const char* key; WeakRef ref; };
-        ImageDescriptor descriptor;
-        descriptor.key = keys[i];
-        descriptor.ref = {0, 0};
         const Word drawMode = i == ViewButton || i == ViewButtonPressed ? 3U : 2U;
-        native<void>(base, 0x7e8a28, menuArt + i, &descriptor, drawMode);
-        native<void>(base, 0x1d9bb4, &descriptor.ref, 0U, 0U, 0U);
+        resolveMenuSkin(base, menuArt[i], keys[i], drawMode);
     };
-    for (Word i = 0; i < MenuArtCount; ++i) resolve(i);
+#ifdef ASTER_SOCIAL_ART
+    changeMenuGroup(base, app, 2, true);
+    heldMenuGroups |= 1U << 2;
+#endif
+    for (Word i = 0; i < sizeof(keys) / sizeof(keys[0]); ++i) resolve(i);
+#ifdef ASTER_SOCIAL_ART
+    for (Word i = 0; i < friendAvatarCount; ++i) {
+        resolveMenuSkin(base, menuArt[FriendPortrait + i], friendAvatarKeys[i], 2U);
+        resolveMenuSkin(base, menuArt[CommunityPortrait + i], communityAvatarKeys[i], 2U);
+    }
+#endif
     constexpr MenuArt delayed[] = {Ribbon, GoalsCard};
     for (Word i = 0; i < 2; ++i) {
         if (menuArt[delayed[i]].image) continue;
@@ -191,14 +271,7 @@ static void loadMenuArt(Word base, Object app) {
 static Object addMenuButton(Word base, const char32_t* label, Word action, int x, int y, int w, int h,
                             bool highlighted = false, MenuArt normal = MenuArtCount,
                             MenuArt pressed = MenuArtCount, int labelHeight = 0) {
-    const char32_t* text = nullptr;
-    makeText(base, text, label);
-    // Stock member-function delegate. The adapter calls field 1 with the
-    // context from field 3 after mouse-up has been dispatched.
-    Word delegate[6] = {base + 0x1787408, reinterpret_cast<Word>(&queueMenuAction),
-                        0, action, 1, base + 0x2cc954};
-    Object button = native<Object>(base, 0x7f25ec, menu.dialog, &text, delegate, highlighted ? 0 : 1);
-    freeText(base, text);
+    Object button = createDialogButton(base, menu.dialog, label, queueMenuAction, action, highlighted);
     if (!button) return nullptr;
     if (action >= chooseFriend) {
         // The row renders its own name and time. Keep the stock input handler.
@@ -246,89 +319,78 @@ static void placeMenuButtons(Object dialog) {
     }
 }
 
-static constexpr char egyptStarTrophyLevel[] = "egypt11";
-
-static Word earnedStars(Word base, Object profile, const char* const* alias) {
+static Word earnedStars(Word base, Object profile, const char* const* alias, Word count) {
     Word mask = 0;
-    for (Word i = 0; i < 3; ++i) {
+    for (Word i = 0; i < count; ++i) {
         if (native<bool>(base, 0x708f8c, profile, alias, i)) mask |= 1U << i;
     }
     return mask;
 }
 
-static bool starChallengesUnlocked(Word base, Word day, Word* earned = nullptr) {
+static bool starChallengesUnlocked(Word base, const AdventureRecords::LevelInfo& level, Word* earned = nullptr) {
     Object store = ownerStore(base);
     Object profile = store ? native<Object>(base, 0x7a98dc, store) : nullptr;
     if (!profile) return false;
     char allocator = 0;
     const char* alias = nullptr;
-    native<void>(base, 0x14ed0e1, &alias, day == 1 ? "egypt1" : "egypt2", &allocator);
+    native<void>(base, 0x14ed0e1, &alias, level.alias, &allocator);
     bool cleared = native<bool>(base, 0x708190, profile, &alias);
-    if (earned) *earned = earnedStars(base, profile, &alias);
+    if (earned) *earned = earnedStars(base, profile, &alias, level.stars);
     releaseString(base, alias);
-    if (cleared) return true;
+    if (cleared || level.alwaysAvailable) return true;
 
-    // The engine checks the claimed progress of the world's StarChallengeUnlockLevel.
-    // Egypt 11 awards the native world trophy on its first clear.
-    native<void>(base, 0x14ed0e1, &alias, egyptStarTrophyLevel, &allocator);
-    cleared = native<bool>(base, 0x708190, profile, &alias);
-    releaseString(base, alias);
-    return cleared;
+    for (const auto& unlock : level.unlocks) {
+        if (!unlock[0]) break;
+        native<void>(base, 0x14ed0e1, &alias, unlock, &allocator);
+        cleared = native<bool>(base, 0x708190, profile, &alias);
+        releaseString(base, alias);
+        if (cleared) return true;
+    }
+    return false;
 }
 
-static constexpr char32_t conditions[2][4][72] = {
-    {U"击败所有僵尸，完成主线关卡",
-     U"别让僵尸踩坏花坛\n保住全部小推车",
-     U"场上最多同时有 12 株植物\n遵守种植线限制\n保住全部小推车",
-     U"最多损失 1 株植物\n最多使用 1250 阳光\n保住全部小推车"},
-    {U"击败所有僵尸，完成主线关卡",
-     U"30 秒内不使用阳光\n保住全部小推车",
-     U"别让僵尸踩坏花坛\n最多损失 2 株植物\n保住全部小推车",
-     U"至少生产 2500 阳光\n场上最多同时有 15 株植物\n保住全部小推车"},
-};
+static void addScoreRow(Word base, Word rank, Word action, const char32_t* name, Word elapsedMs,
+                        Word friendId = 0, Word avatar = unknownFriendAvatar) {
+    if (rank <= menu.page * scoresPerPage || menu.scoreRowCount == scoresPerPage) return;
+    if (!menu.selectedScore) menu.selectedScore = action;
+    const auto bounds = scoreRowBounds(menu.scoreRowCount);
+    auto& row = menu.scoreRows[menu.scoreRowCount++];
+    row.selected = menu.selectedScore == action;
+    row.friendId = friendId;
+    row.avatar = avatar;
+    row.widget = addMenuButton(base, U"", action, bounds.x, bounds.y, bounds.width, bounds.height);
+    char32_t label[64];
+    auto* end = append(number(label, rank), U"  ");
+    Word length = 0;
+    while (length < 7 && name[length]) ++length;
+    end = append(end, name, length);
+    if (name[length]) append(end, U"…");
+    makeText(base, row.player, label);
+    formatTime(label, elapsedMs);
+    makeText(base, row.time, label);
+}
 
-static bool showMenu(Word base, Word day) {
+static bool showMenu(Word base) {
     Object app = gameApp(base);
-    if (!app) return false;
+    if (!app || !menu.level) return false;
+    const auto& level = *menu.level;
     if (menu.dialog) {
         if (!menuMounted(app)) return false;
         native<void>(base, 0x9c0818, field<Object>(menu.dialog, 0xa8));
         menu.buttonCount = 0;
         releaseHeadings(base);
     } else {
-        if (field<Object>(app, 0x1370) || field<Word>(app, 0x1374)) return false;
-        // Match the engine's centered window coordinates across aspect ratios.
-        const float scale = field<float>(app, 0x698);
-        const float maxWidth = float(field<int>(app, 0x524)) * 0.92f;
-        const float maxHeight = float(field<int>(app, 0x528)) * 0.92f;
-        if (!(scale > 0) || maxWidth <= 0 || maxHeight <= 0) return false;
-        const float width = menuWidth * scale < maxWidth ? menuWidth * scale : maxWidth;
-        const float height = menuWidgetHeight * scale < maxHeight ? menuWidgetHeight * scale : maxHeight;
-        menu.dialog = native<Object>(base, 0x14c1a7d, 0x170U);
+        menu.dialog = openGameDialog(base, app, menuWidth, menuWidgetHeight, menuTopGutter);
         if (!menu.dialog) return false;
-        native<void>(base, 0x7f1b6c, menu.dialog);
-        field<unsigned char>(menu.dialog, 0xcd) = 1; // Native full-window dimmer.
-        field<float>(menu.dialog, 0xd0) = 0.5f;
-        const float topGutter = height * menuTopGutter / menuWidgetHeight;
-        const float y = (field<int>(app, 0x528) - height - topGutter) * 0.5f;
-        widgetCall(menu.dialog, 0xac, int((field<int>(app, 0x524) - width) * 0.5f),
-                   y > 0 ? int(y) : 0, int(width), int(height));
-        // Use WidgetManager's modal input stack without promoting the map's
-        // full-screen transition widgets above this dialog.
-        Object manager = field<Object>(app, 0x2c0);
-        widgetCall(manager, 0x10, menu.dialog);
-        widgetCall(manager, 0x38, menu.dialog);
-        native<void>(base, 0x1317158, manager, menu.dialog);
-        widgetCall(manager, 0x2c, menu.dialog);
         loadMenuArt(base, app);
     }
 
-    makeText(base, menu.headings[0], day == 1 ? U"神秘埃及 · 第 1 天" : U"神秘埃及 · 第 2 天");
+    makeText(base, menu.headings[0], AdventureRecords::levelTexts + level.title);
     makeText(base, menu.headings[1], U"过关条件");
-    const char32_t* goals = conditions[day - 1][menu.stars];
+    const char32_t* goals = AdventureRecords::levelTexts + level.goals[menu.stars];
     if (!menu.unlocked) {
-        goals = menu.stars ? U"完成本关主线，或领取\n第 11 天的三星罐头"
-                           : U"完成本关主线可解锁三星\n也可领取第 11 天的三星罐头";
+        goals = level.unlocks[0][0] ? U"完成本关主线，或领取\n本世界的三星罐头"
+                                   : U"完成本关主线解锁星级挑战";
     }
     makeText(base, menu.headings[2], goals);
     makeText(base, menu.headings[3], U"我的成绩");
@@ -338,22 +400,17 @@ static bool showMenu(Word base, Word day) {
     makeText(base, menu.headings[6], label);
 
     Word rank = 0;
+    Word selfTime = menu.bestTimes[menu.stars];
     for (Word i = 0; i < menu.scoreCount; ++i) {
         const auto& score = menu.scores[i];
         if (score.stars != menu.stars) continue;
-        ++rank;
-        if (rank <= menu.page * scoresPerPage || menu.scoreRowCount == scoresPerPage) continue;
-        if (!menu.chosenFriend) menu.chosenFriend = chooseFriend + i;
-        const auto bounds = scoreRowBounds(menu.scoreRowCount);
-        auto& row = menu.scoreRows[menu.scoreRowCount++];
-        row.selected = menu.chosenFriend == chooseFriend + i;
-        row.widget = addMenuButton(base, U"", chooseFriend + i, bounds.x, bounds.y, bounds.width, bounds.height);
-        auto* end = append(append(number(label, rank), U"  "), score.name, 7);
-        if (score.name[7]) append(end, U"…");
-        makeText(base, row.player, label);
-        formatTime(label, score.elapsedMs);
-        makeText(base, row.time, label);
+        if (selfTime && selfTime < score.elapsedMs) {
+            addScoreRow(base, ++rank, chooseSelf, selfName, selfTime);
+            selfTime = 0;
+        }
+        addScoreRow(base, ++rank, chooseFriend + i, score.name, score.elapsedMs, score.id, score.avatar);
     }
+    if (selfTime) addScoreRow(base, ++rank, chooseSelf, selfName, selfTime);
     if (!rank) {
         makeText(base, menu.headings[4], U"暂无好友成绩");
     } else if (rank > scoresPerPage) {
@@ -364,21 +421,31 @@ static bool showMenu(Word base, Word day) {
     }
 
     static constexpr char32_t tabs[][4] = {U"无星", U"第一星", U"第二星", U"第三星"};
-    for (Word i = 0; i < 4; ++i) {
+    for (Word i = level.stars == 1 ? 1 : 0; i <= level.stars; ++i) {
         const bool selected = i == menu.stars;
         const bool locked = i && !menu.unlocked;
-        const MenuArt skin = locked ? (selected ? LockedTabPressed : LockedTab)
-                                    : (selected ? ActiveTab : InactiveTab);
+        MenuArt skin = locked ? (selected ? LockedTabPressed : LockedTab)
+                              : (selected ? ActiveTab : InactiveTab);
+        MenuArt pressed = locked ? LockedTabPressed : skin;
+        bool pointed = skin == ActiveTab;
+#ifdef ASTER_SOCIAL_ART
+        if (menuArt[SocialTab].image && menuArt[SocialTabSelected].image && menuArt[SocialTabLocked].image) {
+            skin = locked ? SocialTabLocked : selected ? SocialTabSelected : SocialTab;
+            pressed = skin;
+            pointed = skin == SocialTabSelected;
+        }
+#endif
         // The green tab extends below its shoulders into the conditions card.
         constexpr int tabHeight = 46;
-        const int height = skin == ActiveTab ? 58 : tabHeight;
-        addMenuButton(base, tabs[i], SelectStars + i, 286 + int(i) * 105, 147, 100, height,
-                      selected, skin, locked ? LockedTabPressed : skin, tabHeight);
+        const int height = pointed ? 58 : tabHeight;
+        const int x = level.stars == 1 ? 448 : 286 + int(i) * 105;
+        addMenuButton(base, tabs[i], SelectStars + i, x, 147, 100, height,
+                      selected, skin, pressed, tabHeight);
     }
     addMenuButton(base, menuArt[Close].image ? U"" : U"×", Dismiss, 669, -35, 45, 36,
                   false, Close, ClosePressed);
-    if (menu.chosenFriend) {
-        addMenuButton(base, U"查看阵型", WatchFriend, (scoresPanelWidth - footerButtonWidth) / 2, 317,
+    if (level.formation && menu.selectedScore) {
+        addMenuButton(base, U"查看阵型", WatchFormation, (scoresPanelWidth - footerButtonWidth) / 2, 317,
                       footerButtonWidth, footerButtonHeight, true, ViewButton, ViewButtonPressed);
     }
     if (!menu.stars || menu.unlocked) {
@@ -438,18 +505,67 @@ static void renderMenu(Word base, Object dialog, Object graphics) {
     }
     native<void>(base, 0x1166c30, graphics, &white);
     drawImage(GoalsCard, goalsCard);
-    drawImage(GoalsCard, personalScoreCard);
-    drawImage(Ribbon, {275, -14, 446, 98});
-    for (Word i = 0; i < 3; ++i) {
-        const MenuArt star = (menu.earnedStars & (1U << i)) ? StarOn : StarOff;
-        drawImage(star, {375 + int(i) * 94, i == 1 ? -5 : 10, 58, 55});
+#ifdef ASTER_SOCIAL_ART
+    const bool hasScorePaper = menuArt[ScorePaper].image;
+    if (hasScorePaper) {
+        drawImage(ScorePaper, {22, 245, 209, 90});
+    } else
+#endif
+        drawImage(GoalsCard, personalScoreCard);
+    constexpr MenuRect ribbon{275, -14, 446, 98};
+    drawImage(Ribbon, ribbon);
+    // The atlas star is tilted 18 degrees clockwise. Correct the center star
+    // and fan the outer stars out by 18 degrees on either side of it.
+    constexpr float cosines[] = {0.809017f, 0.951057f, 1.0f};
+    constexpr float sines[] = {-0.587785f, -0.309017f, 0.0f};
+    const bool single = menu.level->stars == 1;
+    for (Word i = single ? 1 : 0; i < (single ? 2U : 3U); ++i) {
+        const MenuArt star = (menu.earnedStars & (1U << (single ? 0 : i))) ? StarOn : StarOff;
+        const int centerX = ribbon.x + ribbon.width / 2 + (int(i) - 1) * 94;
+        const MenuRect bounds{centerX - 29, i == 1 ? -5 : 15, 58, 55};
+        const Object image = menuArt[star].image;
+        if (!image) continue;
+        const MenuRect box = fit(bounds);
+        const float scaleX = float(box.width) / field<int>(image, 0x28);
+        const float scaleY = float(box.height) / field<int>(image, 0x2c);
+        const float c = cosines[i], s = sines[i];
+        // DrawImageMatrix starts at the image's top-left. Preserve the
+        // midpoint of the scaled bounds while rotating the quad around it.
+        const float halfWidth = box.width * 0.5f;
+        const float halfHeight = box.height * 0.5f;
+        const float matrix[] = {
+            c * scaleX, -s * scaleY, box.x + halfWidth - c * halfWidth + s * halfHeight,
+            s * scaleX,  c * scaleY, box.y + halfHeight - s * halfWidth - c * halfHeight,
+            0,           0,          1,
+        };
+        native<void>(base, 0x116a268, graphics, image, matrix);
     }
+#ifdef ASTER_SOCIAL_ART
+    drawImage(GoalLineLeft, {286, 109, 138, 21});
+    drawImage(GoalLineRight, {574, 109, 138, 21});
+#endif
 
     for (Word i = 0; i < menu.scoreRowCount; ++i) {
         const auto& row = menu.scoreRows[i];
         const auto box = scoreRowBounds(i);
         const bool pressed = row.widget && field<unsigned char>(row.widget, 0x1e4);
         native<void>(base, 0x1166c30, graphics, &white);
+#ifdef ASTER_SOCIAL_ART
+        if (menuArt[FriendRow].image) {
+            drawImage(FriendRow, box);
+            drawImage(FriendAvatar, {box.x + 19, box.y + 3, 35, 35});
+            if (row.friendId) {
+                const auto portrait = row.avatar < friendAvatarCount && menuArt[CommunityPortrait + row.avatar].image
+                    ? MenuArt(CommunityPortrait + row.avatar)
+                    : MenuArt(FriendPortrait + friendAvatarIndex(social.id.owner, row.friendId));
+                drawImage(portrait, {box.x + 21, box.y + 5, 31, 31});
+            }
+            if (row.selected || pressed) drawImage(FriendHover, box);
+            drawText(row.player, {box.x + 56, box.y + 1, box.width - 61, 19}, white);
+            drawText(row.time, {box.x + 56, box.y + 20, box.width - 61, 19}, ink);
+            continue;
+        }
+#endif
         if (menuArt[GoalsCard].image) drawImage(GoalsCard, box);
         else fill(box, paper);
         if (row.selected || pressed) {
@@ -465,6 +581,18 @@ static void renderMenu(Word base, Object dialog, Object graphics) {
         {13, 59, 227, 31}, {27, 280, 198, 33}
     };
     for (Word i = 0; i < 7; ++i) {
+#ifdef ASTER_SOCIAL_ART
+        if (hasScorePaper && i == 3) continue;
+        if (hasScorePaper && i == 6) {
+            drawText(menu.headings[i], {27, 276, 198, 31}, scoreInk);
+            continue;
+        }
+        if (i == 1 && menuArt[GoalLineLeft].image && menuArt[GoalLineRight].image) {
+            constexpr MenuColor heading{50, 80, 18, 255};
+            drawText(menu.headings[i], boxes[i], heading);
+            continue;
+        }
+#endif
         drawText(menu.headings[i], boxes[i], i == 6 ? scoreInk : i == 2 || i == 3 ? ink : white);
     }
     body = previousBody;
@@ -475,6 +603,8 @@ static void renderMenu(Word base, Object dialog, Object graphics) {
 }
 
 extern "C" void asterAdventureDrawMenuPanel(Word base, Object dialog, Object graphics, const MenuRect* bounds) {
+    if (drawBorrowDialogPanel(base, dialog, graphics, bounds)) return;
+    if (userDrawsOwnFrame(dialog)) return;
     if (menu.dialog != dialog) {
         native<void>(base, 0x7f3470, dialog, graphics, bounds);
         return;
@@ -499,5 +629,8 @@ extern "C" void asterAdventureDrawMenu(Word base, Object dialog, Object graphics
     if (menu.dialog == dialog) {
         placeMenuButtons(dialog);
         renderMenu(base, dialog, graphics);
+    } else {
+        drawBorrowDialogContents(base, dialog, graphics);
+        drawUserDialog(base, dialog, graphics);
     }
 }

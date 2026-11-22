@@ -4,11 +4,20 @@
     {
       "id": 1,
       "name": "离线示例好友",
+      "borrowPlant": {"type": "peashooter", "level": 3},
       "runs": [
         {
           "day": 1,
           "stars": 0,
           "elapsedMs": 142300,
+          "cards": [
+            {"type": "sunflower", "level": 2},
+            {"type": "peashooter", "level": 3},
+            {"type": "wallnut", "level": 2},
+            {"type": "cabbagepult", "level": 1},
+            {"type": "potatomine", "level": 4},
+            {"type": "cherry_bomb", "level": 1}
+          ],
           "plants": [
             {"type": "sunflower", "column": 1, "row": 1, "level": 1},
             {"type": "sunflower", "column": 1, "row": 3, "level": 2},
@@ -22,14 +31,55 @@
           "day": 2,
           "stars": 0,
           "elapsedMs": 167800,
+          "cards": [
+            {"type": "sunflower", "level": 1},
+            {"type": "cabbagepult", "level": 2},
+            {"type": "wallnut", "level": 2},
+            {"type": "peashooter", "level": 3}
+          ],
           "plants": [
             {"type": "sunflower", "column": 1, "row": 2, "level": 1},
             {"type": "cabbagepult", "column": 3, "row": 2, "level": 2},
             {"type": "peashooter", "column": 3, "row": 4, "level": 3},
             {"type": "wallnut", "column": 5, "row": 2, "level": 2}
           ]
+        },
+        {
+          "level": "pirate1",
+          "stars": 0,
+          "elapsedMs": 161400,
+          "plants": [
+            {"type": "sunflower", "column": 1, "row": 1, "level": 1},
+            {"type": "cabbagepult", "column": 3, "row": 3, "level": 2},
+            {"type": "wallnut", "column": 5, "row": 4, "level": 1}
+          ]
+        },
+        {
+          "level": "iceage1",
+          "stars": 0,
+          "elapsedMs": 182500,
+          "plants": [
+            {"type": "sunflower", "column": 1, "row": 2, "level": 1},
+            {"type": "cabbagepult", "column": 3, "row": 3, "level": 2},
+            {"type": "wallnut", "column": 4, "row": 5, "level": 1}
+          ]
+        },
+        {
+          "level": "lostcity3",
+          "stars": 0,
+          "elapsedMs": 174600,
+          "plants": [
+            {"type": "sunflower", "column": 1, "row": 1, "level": 1},
+            {"type": "peashooter", "column": 3, "row": 3, "level": 2},
+            {"type": "wallnut", "column": 5, "row": 4, "level": 1}
+          ]
         }
       ]
-    }
+    },
+    {"id": 2, "name": "向日葵队长", "borrowPlant": {"type": "sunflower", "level": 2}, "runs": []},
+    {"id": 3, "name": "小坚果", "borrowPlant": {"type": "wallnut", "level": 2}, "runs": []},
+    {"id": 4, "name": "晚风葵田", "borrowPlant": {"type": "cherry_bomb", "level": 2}, "runs": []},
+    {"id": 5, "name": "海盐豌豆", "borrowPlant": {"type": "repeater", "level": 3}, "runs": []},
+    {"id": 6, "name": "卷心菜邮差", "borrowPlant": {"type": "cabbagepult", "level": 2}, "runs": []}
   ]
 }

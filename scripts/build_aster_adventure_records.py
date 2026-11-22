@@ -35,6 +35,7 @@ BOARD_LOAD_CALL, BOARD_LOAD = 0x350570, 0x1A2AF70
 BOARD_READY_CALL, BOARD_UPDATE_DONE = 0x2297EC, 0x229520
 STAR_CHOICE, STAR_CHOSEN = 0x225FF4, 0x2260A8
 STAR_MODULE_GATE, STAR_MODULE_LOCKED, STAR_MODULE_ENABLED = 0x90221C, 0x902348, 0x902244
+STAR_DESCRIPTIONS_GATE, STAR_DESCRIPTIONS_ENABLED = 0x7B1EB8, 0x7B1EC8
 STAR_RESULT_TITLE = 0x7E5568
 STAR_RIBBON_ART, STAR_RIBBON_EMPTY, STAR_RIBBON_GOLD = 0x805DB0, 0x805FB0, 0x805FF8
 LEVEL_MENU_DRAW, POP_GRAPHICS = 0x7F3934, 0x116D764
@@ -45,6 +46,27 @@ START_BUTTON_EVENT, DISPATCH_EVENT = 0x926D08, 0x21DF78
 BOARD_TOUCH_CALLS, BOARD_TOUCH = (0x1A30114, 0x1A3013C, 0x1A30164), 0x1A2E16C
 TITLE_TEXT, TRANSLATE_TEXT = 0x205544, 0xD07BB4
 BOARD_MESSAGE_DRAW, BOARD_MESSAGE_TARGET = 0x46D890, 0x1A30074
+VIEWPORT_NORMAL_DRAW = 0x1A64638
+VIEWPORT_HIGH_DRAW = 0x1A64434
+SEED_BANK_REFRESH = 0x895BD8
+SEED_PACKET_DRAW_CALL, SEED_PACKET_DRAW = 0x8AE434, 0x8AB53C
+GOLD_TILE_SUN = 0x3C1834
+PLAY_NARRATIVE = 0x2AF780
+# InitialPlantModule, InitialPlantPlacer and InitialZombiePlacer. The
+# separate InitialGridItemPlacer still builds the original terrain.
+INITIAL_ACTORS = (0x7CE1C8, 0x7D010C, 0x7D4C08)
+SETTINGS_ROW, PICKUP_ROW = 0x8E6114, 0x1A68118
+SETTINGS_CLICK, PICKUP_CLICK = 0x8E8884, 0x1A6813C
+SETTINGS_TITLE, PICKUP_TITLE = 0x8E7868, 0x1A68184
+SETTINGS_CHOICES, PICKUP_CHOICES = 0x8E7B34, 0x1A681B0
+SETTINGS_CHOICES_DONE = 0x8E7BE4
+SUN_BUTTON_OPEN, STOCK_SUN_PURCHASE = 0x93DD9C, 0x418E44
+STOCK_SUN_CLOSE, SHOP_SCROLLBAR_CALL, SHOP_SCROLLBAR_VISIBLE = 0x418D18, 0x92C408, 0x1370BC0
+USER_MAP_DRAW_SLOT, USER_MAP_HIT_SLOT, USER_MAP_TOUCH_SLOT = 0x17C7A9C, 0x17C7AB4, 0x17C7B1C
+USER_MAP_NO_HIT, USER_MAP_NO_TOUCH = 0xA1BF74, 0xA1BBB0
+USER_MAP_OVERLAY_SLOT, USER_MAP_OVERLAY_THUNK = 0x17C7B28, 0xA1C6B0
+SIGN_IN_CREATE, CREATE_HUD = 0x9FF7C4, 0x9781E8
+SHOP_CODE_CARD, SHOP_CODE_SKIP = 0x9361A0, 0x935EBC
 FLAGS = [
     "--target=armv7a-linux-androideabi24", "-marm", "-march=armv7-a",
     "-mfloat-abi=softfp", "-mfpu=vfpv3-d16", "-Os", "-std=c++17",
@@ -54,12 +76,14 @@ FLAGS = [
 ]
 
 
-def payload(ndk, output, address, state_address, battle_tools, social_levels):
+def payload(ndk, output, address, state_address, battle_tools, social_levels, social_art):
     clang = ndk / "toolchains/llvm/prebuilt/windows-x86_64/bin/clang++.exe"
     obj, linked, layout = (output / f"adventure-records.{ext}" for ext in ("o", "elf", "ld"))
     defines = ["-DASTER_WSA_BATTLE_TOOLS"] if battle_tools else []
     if social_levels:
-        defines.append("-DASTER_SOCIAL_LEVELS")
+        defines.extend(("-DASTER_SOCIAL_LEVELS", "-I", str(output)))
+    if social_art:
+        defines.append("-DASTER_SOCIAL_ART")
     subprocess.run([clang, *FLAGS, *defines, "-c", ROOT / "src/adventure-records/adventure_records.cpp",
                     "-o", obj], check=True)
     layout.write_text(f"""ENTRY(asterAdventureStart)
@@ -84,7 +108,7 @@ SECTIONS {{
         return bytearray(code.data()), state["sh_size"], symbols
 
 
-def patch_native(native, ndk, output, battle_tools=False, social_levels=False):
+def patch_native(native, ndk, output, battle_tools=False, social_levels=False, social_art=False):
     elf = ELFFile(BytesIO(native))
     loads = [(i, seg) for i, seg in enumerate(elf.iter_segments()) if seg["p_type"] == "PT_LOAD"]
     (code_index, code), (state_index, state) = loads[-2:]
@@ -98,7 +122,8 @@ def patch_native(native, ndk, output, battle_tools=False, social_levels=False):
         kill = file_offset(elf, KILL_ZOMBIES)
         if struct.unpack_from("<4I", native, kill) != (0xE92D4FF0, 0xE59F5164, 0xE28DB020, 0xE24DD05C):
             raise ValueError("A250 native zombie-clearing routine changed")
-    body, state_size, symbols = payload(ndk, output, address, state_address, battle_tools, social_levels)
+    body, state_size, symbols = payload(ndk, output, address, state_address,
+                                        battle_tools, social_levels, social_art)
     assembler = Ks(KS_ARCH_ARM, KS_MODE_ARM)
 
     def stub(source):
@@ -166,6 +191,190 @@ def patch_native(native, ndk, output, battle_tools=False, social_levels=False):
         (DRAW_CALL, branch(DRAW_CALL, DRAW, True), branch(DRAW_CALL, draw, True)),
     ]
     if social_levels:
+        user_attach = stub(f"""push {{r4,lr}}
+            bl #{CREATE_HUD}
+            mov r4,r0
+            {helper("asterUserAttach", "r0")}
+            mov r0,r4
+            pop {{r4,pc}}
+        """)
+        changes.append((SIGN_IN_CREATE, branch(SIGN_IN_CREATE, CREATE_HUD, True),
+                        branch(SIGN_IN_CREATE, user_attach, True)))
+        # The original empty lottery draw also serves as the false-returning
+        # hit test of another map widget. Patch only the lottery vtable.
+        for site, original, symbol, arguments in (
+                (USER_MAP_DRAW_SLOT, USER_MAP_NO_HIT, "asterUserDraw", "mov r2,r1"),
+                (USER_MAP_TOUCH_SLOT, USER_MAP_NO_TOUCH, "asterUserTouch",
+                 "sub sp,sp,#8\nstr r3,[sp]\nmov r3,r2\nmov r2,r1")):
+            entry = stub(f"""push {{r4,lr}}
+                {arguments}
+                {helper(symbol, 'r0')}
+                {'add sp,sp,#8' if site == USER_MAP_TOUCH_SLOT else ''}
+                pop {{r4,pc}}
+            """)
+            changes.append((site, struct.pack("<I", original), struct.pack("<I", entry)))
+            if site == USER_MAP_DRAW_SLOT:
+                # The overlay renderer passes the secondary base at widget+16.
+                overlay = stub(f"sub r0,r0,#16\nb #{entry}")
+                changes.append((USER_MAP_OVERLAY_SLOT, struct.pack("<I", USER_MAP_OVERLAY_THUNK),
+                                struct.pack("<I", overlay)))
+        user_hit = stub(f"""push {{r4,lr}}
+            mov r3,r2
+            mov r2,r1
+            {helper("asterUserHit", "r0")}
+            pop {{r4,pc}}
+        """)
+        changes.append((USER_MAP_HIT_SLOT, struct.pack("<I", USER_MAP_NO_HIT), struct.pack("<I", user_hit)))
+        shop_code = stub(f"""push {{r0-r3,ip,lr}}
+            {helper("asterUserHasCodeEntry", "r0")}
+            cmp r0,#0
+            pop {{r0-r3,ip,lr}}
+            bne #{SHOP_CODE_SKIP}
+            mov r0,#304
+            b #{SHOP_CODE_CARD + 4}
+        """)
+        changes.append((SHOP_CODE_CARD, struct.pack("<I", 0xE3A00E13), branch(SHOP_CODE_CARD, shop_code)))
+
+        def four_args(name):
+            return stub(f"""push {{r4,lr}}
+                sub sp,sp,#8
+                str r3,[sp]
+                mov r3,r2
+                mov r2,r1
+                {helper(name, "r0")}
+                add sp,sp,#8
+                pop {{r4,pc}}
+            """)
+
+        borrow_cursor = stub(f"""push {{r4,lr}}
+            mov r3,r5
+            mov r2,r1
+            {helper("asterAdventureBindBorrowCursor", "r0")}
+            pop {{r4,pc}}
+        """)
+        for site, original, replacement in (
+                (0x28F2A8, 0x229E8C, borrow_cursor),
+                (0x4E751C, 0x4E719C, four_args("asterAdventurePlaceBorrowed")),
+                (0x79BB90, 0x207D90, four_args("asterAdventureTacticalCuke"))):
+            changes.append((site, branch(site, original, True), branch(site, replacement, True)))
+
+        chooser_hide = stub(f"""{guard("asterBorrowDeferChooserHide")}
+            .word 0xe92d48f0
+            b #0x8f25d0
+        """)
+        changes.append((0x8F25CC, struct.pack("<I", 0xe92d48f0), branch(0x8F25CC, chooser_hide)))
+        behind_chooser = stub(f"""push {{r4,lr}}
+            mov r2,r1
+            {helper("asterBorrowDrawBehindChooser", "r0")}
+            pop {{r4,pc}}
+        """)
+        over_chooser = stub(f"""push {{r4,lr}}
+            mov r2,r0
+            ldr r1,[fp,#-0x88]
+            {helper("asterBorrowDrawOverChooser", "r1")}
+            pop {{r4,pc}}
+        """)
+        changes.extend((
+            (0x8A603C, branch(0x8A603C, 0x976438, True), branch(0x8A603C, behind_chooser, True)),
+            (0x8A6B00, branch(0x8A6B00, POP_GRAPHICS, True), branch(0x8A6B00, over_chooser, True)),
+        ))
+
+        # Read the completed native world matrix at the normal draw call.
+        # At the high-view tail call there is no extra device transform.
+        center_view = stub(f"""push {{r0-r3,ip,lr}}
+            add r3,sp,#44
+            mov r2,r1
+            {helper("asterAdventureDrawFormationCamera", "r0")}
+            pop {{r0-r3,ip,pc}}
+        """)
+        changes.append((VIEWPORT_NORMAL_DRAW, struct.pack("<I", 0xE12FFF32),
+                        branch(VIEWPORT_NORMAL_DRAW, center_view, True)))
+        high_view = stub(f"""push {{r4,lr}}
+            mov r2,r1
+            mov r3,#0
+            {helper("asterAdventureDrawFormationCamera", "r0")}
+            pop {{r4,pc}}
+        """)
+        changes.append((VIEWPORT_HIGH_DRAW, struct.pack("<I", 0xE12FFF12),
+                        branch(VIEWPORT_HIGH_DRAW, high_view)))
+        refresh = stub(f"""{guard("asterAdventureViewSeedBankRefresh")}
+            .word 0xe92d4818
+            b #{SEED_BANK_REFRESH + 4}
+        """)
+        seed_draw = stub(f"""push {{r4,lr}}
+            mov r3,r2
+            mov r2,r1
+            {helper("asterAdventureDrawFormationCard", "r0")}
+            pop {{r4,pc}}
+        """)
+        changes.extend((
+            (SEED_BANK_REFRESH, struct.pack("<I", 0xe92d4818), branch(SEED_BANK_REFRESH, refresh)),
+            (SEED_PACKET_DRAW_CALL, branch(SEED_PACKET_DRAW_CALL, SEED_PACKET_DRAW, True),
+             branch(SEED_PACKET_DRAW_CALL, seed_draw, True)),
+        ))
+        sun_button = stub(f"""push {{r0-r3,ip,lr}}
+            mov r2,r1
+            {helper("asterFriendSunOpen", "r0")}
+            pop {{r0-r3,ip,pc}}
+        """)
+        changes.append((SUN_BUTTON_OPEN, branch(SUN_BUTTON_OPEN, STOCK_SUN_PURCHASE, True),
+                        branch(SUN_BUTTON_OPEN, sun_button, True)))
+        sun_close = stub(f"""push {{r0-r3,ip,lr}}
+            {helper("asterFriendSunBeforeClose", "r0")}
+            pop {{r0-r3,ip,lr}}
+            push {{r3-r6,r11,lr}}
+            b #{STOCK_SUN_CLOSE + 4}
+        """)
+        sun_scrollbar = stub(f"""push {{r1-r3,lr}}
+            {helper("asterFriendSunShopScrollbar", "r0")}
+            pop {{r1-r3,pc}}
+        """)
+        changes.extend((
+            (STOCK_SUN_CLOSE, struct.pack("<I", 0xE92D4878), branch(STOCK_SUN_CLOSE, sun_close)),
+            (SHOP_SCROLLBAR_CALL, branch(SHOP_SCROLLBAR_CALL, SHOP_SCROLLBAR_VISIBLE, True),
+             branch(SHOP_SCROLLBAR_CALL, sun_scrollbar, True)),
+        ))
+        # Chain to A250's automatic pickup hooks for the existing settings
+        # pages. Both custom rows use the game's native radio-button layout.
+        settings_row = stub(f"""push {{r0-r4,lr}}
+            {helper("asterSocialSettingsRow", "r4")}
+            pop {{r0-r4,lr}}
+            b #{PICKUP_ROW}
+        """)
+        settings_click = stub(f"""push {{r0-r4,lr}}
+            mov r2,r1
+            {helper("asterSocialSettingsClick", "r0")}
+            cmp r0,#2
+            moveq r1,#9
+            streq r1,[sp,#4]
+            beq stock_click
+            cmp r0,#0
+            pop {{r0-r4,lr}}
+            bxne lr
+            b #{PICKUP_CLICK}
+            stock_click:
+            pop {{r0-r4,lr}}
+            b #{PICKUP_CLICK}
+        """)
+        settings_title = stub(f"""{guard("asterSocialSettingsTitle")}
+            b #{PICKUP_TITLE}
+        """)
+        settings_choices = stub(f"""push {{r0-r3,ip,lr}}
+            mov r2,r1
+            {helper("asterSocialSettingsChoices", "r0")}
+            cmp r0,#0
+            pop {{r0-r3,ip,lr}}
+            bne #{SETTINGS_CHOICES_DONE}
+            b #{PICKUP_CHOICES}
+        """)
+        for site, old, new, link in (
+            (SETTINGS_ROW, PICKUP_ROW, settings_row, True),
+            (SETTINGS_CLICK, PICKUP_CLICK, settings_click, False),
+            (SETTINGS_TITLE, PICKUP_TITLE, settings_title, True),
+            (SETTINGS_CHOICES, PICKUP_CHOICES, settings_choices, True),
+        ):
+            changes.append((site, branch(site, old, link), branch(site, new, link)))
+
         choose = stub(f"""push {{r4-r7,lr}}
             sub sp,sp,#12
             str r3,[sp]
@@ -215,9 +424,19 @@ def patch_native(native, ndk, output, battle_tools=False, social_levels=False):
             {helper("asterAdventureTranslateTitle", "r0")}
             pop {{r0-r3,ip,pc}}
         """)
-        board_message = stub(f"""{guard("asterAdventureSuppressMessages")}
+        board_message = stub(f"""{guard("asterAdventureSuppressBoardEffects")}
             b #{BOARD_MESSAGE_TARGET}
         """)
+        # Keep the terrain initializer and the preview's own HUD. Only the
+        # effects that add sun, dialogue or extra combatants are suspended.
+        transient_effects = ((PLAY_NARRATIVE, 0xE92D4BF0),
+                             *((site, 0xE92D4FF0) for site in (GOLD_TILE_SUN, *INITIAL_ACTORS)))
+        for site, prologue in transient_effects:
+            effect = stub(f"""{guard("asterAdventureSuppressBoardEffects")}
+                .word {prologue}
+                b #{site + 4}
+            """)
+            changes.append((site, struct.pack("<I", prologue), branch(site, effect)))
         initial_star = stub(f"""push {{r0-r3,ip,lr}}
             mov r2,r0
             {helper("asterAdventureSelectChallenge", "r8")}
@@ -237,6 +456,17 @@ def patch_native(native, ndk, output, battle_tools=False, social_levels=False):
             cmp r0,#0
             beq #{STAR_MODULE_LOCKED}
             b #{STAR_MODULE_GATE + 4}
+        """)
+        # The condition dialog repeats the world unlock check before filling
+        # its vector. It must use the same access decision as the active tier.
+        star_descriptions = stub(f"""bne #{STAR_DESCRIPTIONS_ENABLED}
+            push {{r0-r3,ip,lr}}
+            ldr r1,[fp,#-0x3c]
+            {helper("asterAdventureSelectedStarDescriptions", "r1")}
+            cmp r0,#0
+            pop {{r0-r3,ip,lr}}
+            bne #{STAR_DESCRIPTIONS_ENABLED}
+            b #{STAR_DESCRIPTIONS_GATE + 4}
         """)
         star_title = stub(f"""push {{r0-r3,ip,lr}}
             {helper("asterAdventureAllStarsTitle", "r5")}
@@ -283,6 +513,8 @@ def patch_native(native, ndk, output, battle_tools=False, social_levels=False):
              branch(BOARD_MESSAGE_DRAW, board_message)),
             (STAR_CHOICE, struct.pack("<I", 0xE1A05000), branch(STAR_CHOICE, initial_star)),
             (STAR_MODULE_GATE, struct.pack("<I", 0x0A000049), branch(STAR_MODULE_GATE, star_module)),
+            (STAR_DESCRIPTIONS_GATE, struct.pack("<I", 0x1A000002),
+             branch(STAR_DESCRIPTIONS_GATE, star_descriptions)),
             (STAR_RESULT_TITLE, struct.pack("<I", 0xE3530002), branch(STAR_RESULT_TITLE, star_title)),
             (STAR_RIBBON_ART, struct.pack("<I", 0xE59630A4), branch(STAR_RIBBON_ART, star_ribbon)),
             (LEVEL_MENU_DRAW, branch(LEVEL_MENU_DRAW, POP_GRAPHICS, True),
@@ -328,7 +560,8 @@ def social_dex(output, sdk):
     output.mkdir(exist_ok=True)
     android = sdk / "platforms/android-34/android.jar"
     package = ROOT / "src/bootstrap-extra/com/popcap/pvz2cthd"
-    sources = [package / (name + ".java") for name in ("AdventureFormationRecord", "AdventureSocial")]
+    names = ("AdventureFormationRecord", "AdventureFriendFiles", "AdventureSocial", "AsterSaveBackup")
+    sources = [package / (name + ".java") for name in names]
     classes = output / "classes"
     classes.mkdir(exist_ok=True)
     subprocess.run(["javac", "-encoding", "UTF-8", "-source", "8", "-target", "8",
@@ -336,7 +569,7 @@ def social_dex(output, sdk):
                     "-implicit:none", "-d", classes, *sources], check=True)
     jar = output / "social.jar"
     with ZipFile(jar, "w") as archive:
-        for name in ("AdventureFormationRecord", "AdventureSocial"):
+        for name in names:
             for item in sorted((classes / "com/popcap/pvz2cthd").glob(name + "*.class")):
                 archive.write(item, item.relative_to(classes).as_posix())
     subprocess.run(["java", "-Xmx384m", "-cp", sdk / "build-tools/34.0.0/lib/d8.jar",
@@ -361,26 +594,83 @@ def hook_social_frame(original, output):
         raise ValueError("Missing existing game renderer frame callback")
     hook = "    invoke-static {}, Lcom/popcap/pvz2cthd/AdventureSocial;->frame()V"
     renderer.write_text(text.replace(entry, entry + "\n\n" + hook), encoding="utf-8")
+    activity = smali / "com/popcap/SexyAppFramework/SexyAppFrameworkActivity.smali"
+    text = activity.read_text(encoding="utf-8")
+    entry = ("    invoke-static {p0, p1, p2, p3}, Lcom/popcap/pvz2cthd/PresetEditor;->onActivityResult"
+             "(Landroid/app/Activity;IILandroid/content/Intent;)Z")
+    if text.count(entry) != 1:
+        raise ValueError("Missing existing game document result handler")
+    export = (
+        entry.replace("PresetEditor", "AdventureSocial") + "\n"
+        "    move-result v0\n"
+        "    if-eqz v0, :aster_social_original_result\n"
+        "    return-void\n"
+        "    :aster_social_original_result\n\n"
+    )
+    activity.write_text(text.replace(entry, export + entry), encoding="utf-8")
     rebuilt = output / "renderer.dex"
     subprocess.run([*cli, "encode", smali, rebuilt], check=True)
     return rebuilt.read_bytes()
 
 
+def patch_user_entry(dynamic):
+    from build_aster_daily_sign_in import LAYOUTS
+    from build_aster_hud_pickup import Bundle, replace_rton
+
+    def add_user_button(document):
+        sheets = {alias: entry["objdata"] for entry in document["objects"]
+                  for alias in entry.get("aliases", ())}
+        sign = sheets["UIWorldMapLoginRewardButton"]
+        button = sign.copy()
+        button.update(Class="WorldMap_LotteryButton",
+                      PositionOffset={"x": sign["PositionOffset"]["x"] + 94, "y": sign["PositionOffset"]["y"]})
+        document["objects"].append({"objclass": "UIWidgetSheet", "aliases": ["UIWorldMapUserButton"], "objdata": button})
+
+    bundle = Bundle(dynamic)
+    for layout in LAYOUTS:
+        replace_rton(bundle, f"PACKAGES\\{layout}.RTON", add_user_button, allow_growth=True)
+    return bundle.build()
+
+
+def hook_save_restore(smali):
+    importer = "    invoke-static {p0}, Lcom/popcap/pvz2cthd/PresetProfileImporter;->apply(Landroid/content/Context;)V"
+    if smali.count(importer) != 1:
+        raise ValueError("Missing bootstrap save initialization")
+    restore = importer.replace("PresetProfileImporter;->apply(", "AsterSaveBackup;->applyPending(")
+    return smali.replace(importer, restore + "\n\n" + importer)
+
+
 def build(base, output, sdk, ndk, signing=None, wsa_test=False, wsa_battle_tools=False,
-          social_levels=False):
+          social_levels=False, social_art=None, cn_user_apk=None):
     if wsa_battle_tools and not wsa_test:
         raise ValueError("Battle tools are available only in a WSA test build")
+    if (social_art or cn_user_apk) and not social_levels:
+        raise ValueError("Social sprites require the social level menu")
     output.mkdir(parents=True, exist_ok=True)
     sources = {abi: base / f"PvZ2-Unline-Aster-A250-{abi}.apk" for abi in ARM_ENGINES}
+    if social_levels:
+        from prepare_aster_adventure_levels import make_catalog, write_packet_anchors, write_user_plants
+
+        catalog = make_catalog(sources["ARM32"], output)
+        write_packet_anchors(sources["ARM32"], output)
+        write_user_plants(sources["ARM32"], output)
     with ZipFile(sources["ARM32"]) as arm32, ZipFile(sources["ARM64"]) as arm64:
         original = arm32.read(ARM_ENGINES["ARM32"])
         if original != arm64.read(ARM_ENGINES["ARM64"]):
             raise ValueError("A250 engines must share the same ARM32 code")
-    patched = patch_native(original, ndk, output, wsa_battle_tools, social_levels)
+    patched = patch_native(original, ndk, output, wsa_battle_tools, social_levels, bool(social_art))
     (output / "libSrc-adventure-records.so").write_bytes(patched)
     if not signing:
         return
-    version = 272 if social_levels else 251
+    if social_levels:
+        from build_aster_hud_pickup import ASSET, BOOTSTRAP, PLAN, create_plan, rebuild_dynamic_bootstrap
+        from prepare_aster_social_art import add_social_art
+
+        with ZipFile(sources["ARM32"]) as apk:
+            original_dynamic = apk.read(ASSET)
+        dynamic = add_social_art(patch_user_entry(original_dynamic), social_art, cn_user_apk)
+        plan = create_plan(dynamic, output, rgba_atlases=1)
+    version = 302 if social_levels else 251
     companion_dex = social_dex(output / "social-dex", sdk) if social_levels else None
     architectures = ("ARM32",) if wsa_test else ARM_ENGINES
     for abi in architectures:
@@ -391,13 +681,21 @@ def build(base, output, sdk, ndk, signing=None, wsa_test=False, wsa_battle_tools
                         if wsa_test else [])
             changes = {member: patched, "AndroidManifest.xml": manifest}
             extra_entries = {}
+            if social_levels:
+                if apk.read(ASSET) != original_dynamic:
+                    raise ValueError("Both architectures must start with the same dynamic bundle")
+                changes.update({ASSET: dynamic, PLAN: plan,
+                                BOOTSTRAP: rebuild_dynamic_bootstrap(
+                                    apk.read(BOOTSTRAP), output / f"bootstrap-{abi}", original_dynamic, dynamic,
+                                    transform=hook_save_restore)})
             if companion_dex is not None:
                 changes["classes.dex"] = hook_social_frame(apk.read("classes.dex"), output / f"renderer-{abi}")
                 last_dex = max(int(match[1] or "1") for name in apk.namelist()
                                if (match := re.fullmatch(r"classes(\d*)\.dex", name)))
                 friends = ROOT / "src/adventure-records/friends.json"
                 extra_entries = {f"classes{last_dex + 1}.dex": companion_dex,
-                                 "assets/adventure/friends.json": friends.read_bytes()}
+                                 "assets/adventure/friends.json": friends.read_bytes(),
+                                 "assets/adventure/levels.json": catalog}
         if wsa_test and len(excluded) != 3:
             raise ValueError("The WSA candidate expects three already extracted resource parts")
         label = f"{abi}-WSA-existing-data" if wsa_test else abi
@@ -416,4 +714,6 @@ if __name__ == "__main__":
     parser.add_argument("--wsa-test", action="store_true")
     parser.add_argument("--wsa-battle-tools", action="store_true")
     parser.add_argument("--social-levels", action="store_true")
+    parser.add_argument("--social-art", type=Path, help="ZIP with the supplied 1536 social atlases")
+    parser.add_argument("--cn-user-apk", type=Path, help="Local authorized Chinese 4.2.8 APK for the user panel sprites")
     build(**vars(parser.parse_args()))

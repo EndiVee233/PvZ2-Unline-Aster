@@ -6,6 +6,11 @@ using AdventureRecords::Plant;
 using AdventureRecords::Record;
 using AdventureRecords::Stopwatch;
 
+struct WeakRef {
+    Word id;
+    Word serial;
+};
+
 template<class T> static T& field(Object object, Word offset) {
     return *reinterpret_cast<T*>(object + offset);
 }
@@ -22,6 +27,14 @@ struct Run {
     Word stars;
     float startedAt;
     Stopwatch clock;
+#ifdef ASTER_SOCIAL_LEVELS
+    bool friendSunUsed;
+    Word tacticalCukeUses;
+    AdventureRecords::Card borrowedCard;
+    WeakRef borrowedDrop;
+    Object borrowedCursor;
+    float borrowedDropTime;
+#endif
 #ifdef ASTER_WSA_BATTLE_TOOLS
     float commandPollAt;
     float clearAt;
@@ -35,9 +48,20 @@ static Record completed;
 static Record prior;
 static bool hasCompleted;
 
-static Object gameBoard(Word base) {
+#ifdef ASTER_SOCIAL_LEVELS
+static bool socialContentEnabled(Word base);
+static void bindBorrowedCard(Object board);
+static void dropBorrowedCard(Word base, Object board);
+#include "loadout.h"
+#endif
+
+static Object gameApp(Word base) {
     Object holder = field<Object>(reinterpret_cast<Object>(base), 0x1821674);
-    Object app = holder ? field<Object>(holder, 0) : nullptr;
+    return holder ? field<Object>(holder, 0) : nullptr;
+}
+
+static Object gameBoard(Word base) {
+    const auto app = gameApp(base);
     return app ? field<Object>(app, 0x6bc) : nullptr;
 }
 
@@ -49,8 +73,12 @@ static Word owner(Object store) {
     return store ? field<Word>(store, 0x74) : ~0U;
 }
 
+static Object gameClock(Word base) {
+    return field<Object>(reinterpret_cast<Object>(base), 0x1830528);
+}
+
 static float now(Word base) {
-    Object clock = field<Object>(reinterpret_cast<Object>(base), 0x1830528);
+    const auto clock = gameClock(base);
     return clock ? field<float>(clock, 0x24) : 0;
 }
 
@@ -61,6 +89,7 @@ static bool playing(Object board) {
 
 static Object observedBattleBoard;
 static float observedBattleStart;
+static constexpr Word plantActionsEnabled = 0x7fb;
 
 static void restoreEgyptEndlessPlantUpdates(Word base, Object board) {
     if (!board || !playing(board)) return;
@@ -78,7 +107,6 @@ static void restoreEgyptEndlessPlantUpdates(Word base, Object board) {
     }
     // The legacy floor intro suspends plant actions. Its restored seed chooser
     // enters battle without re-enabling the plant action state machine.
-    constexpr Word plantActionsEnabled = 0x7fb;
     field<unsigned char>(board, plantActionsEnabled) = 1;
 }
 
@@ -86,8 +114,18 @@ static bool sameRun(Word base, Object board) {
     return board && current.board == board && gameBoard(base) == board &&
         owner(ownerStore(base)) == current.owner &&
         field<float>(board, 0xcc) == current.startedAt &&
-        AdventureRecords::egyptDay(field<const char*>(board, 0xc4)) == current.day;
+        AdventureRecords::levelId(field<const char*>(board, 0xc4)) == current.day;
 }
+
+#ifdef ASTER_SOCIAL_LEVELS
+extern "C" void asterAdventureTacticalCuke(Word base, Object board, Word event, Word mode, Word data) {
+    if (sameRun(base, board) && field<Word>(board, 0xc0) == 5 && !field<Word>(board, 0x7f4) &&
+        current.tacticalCukeUses < AdventureRecords::maxCukeUses) {
+        ++current.tacticalCukeUses;
+    }
+    native<void>(base, 0x207d90, board, event, mode, data);
+}
+#endif
 
 #ifdef ASTER_WSA_BATTLE_TOOLS
 static constexpr char commandPath[] = "/data/data/com.pvz2unline.aster/cache/aster-battle-tools.cmd";
@@ -135,8 +173,11 @@ extern "C" void asterAdventureStart(Word base, Object board) {
     if (observedBattleBoard == board) observedBattleBoard = nullptr;
     restoreEgyptEndlessPlantUpdates(base, board);
     if (!board || board != gameBoard(base) || !playing(board)) return;
-    Word day = AdventureRecords::egyptDay(field<const char*>(board, 0xc4));
-    if (!day || field<Word>(board, 0xb4) != 9 || field<Word>(board, 0xb8) != 5) return;
+#ifdef ASTER_SOCIAL_LEVELS
+    if (!socialContentEnabled(base)) return;
+#endif
+    Word day = AdventureRecords::levelId(field<const char*>(board, 0xc4));
+    if (!day) return;
     int starIndex = field<unsigned char>(board, 0x8a0) ? field<int>(board, 0x7f0) : -1;
     if (starIndex < -1 || starIndex > 2) return;
     Object store = ownerStore(base);
@@ -146,14 +187,19 @@ extern "C" void asterAdventureStart(Word base, Object board) {
     if (!profile) return;
     float start = field<float>(board, 0xcc);
     if (!(start > 0 && start <= now(base))) return;
-    current = {};
+    auto* bytes = reinterpret_cast<volatile unsigned char*>(&current);
+    for (Word i = 0; i < sizeof(current); ++i) bytes[i] = 0;
     current.board = board;
     current.profile = profile;
     current.owner = id;
     current.day = day;
     current.stars = Word(starIndex + 1);
     current.startedAt = start;
-    current.clock = {start, 0, true};
+    current.clock = {start, 0};
+#ifdef ASTER_SOCIAL_LEVELS
+    captureLoadout(base, board, profile);
+    bindBorrowedCard(board);
+#endif
     hasCompleted = false;
 }
 
@@ -165,9 +211,15 @@ extern "C" void asterAdventureTick(Word base, Object board) {
         current.board = nullptr;
         return;
     }
-    const float time = now(base);
+    const auto clock = gameClock(base);
+    if (!clock) return;
+    const float time = field<float>(clock, 0x24);
     const bool live = playing(board);
-    current.clock.sample(time, live);
+    current.clock.advance(time, field<float>(clock, 0x28), live);
+#ifdef ASTER_SOCIAL_LEVELS
+    if (live && current.borrowedCard.level && !current.borrowedDrop.id && !current.borrowedDrop.serial &&
+        current.clock.elapsed >= current.borrowedDropTime) dropBorrowedCard(base, board);
+#endif
 #ifdef ASTER_WSA_BATTLE_TOOLS
     if (live && !field<unsigned char>(board, 0x7fe)) checkBattleTools(base, time);
 #endif
@@ -188,18 +240,19 @@ static void recordPath(char* out, Word ownerId, Word day, Word stars, bool tempo
     }
     for (int shift = 28; shift >= 0; shift -= 4) *out++ = hex[(ownerId >> shift) & 15];
     *out++ = '-';
-    *out++ = char('0' + day);
+    // Keep the A275 filenames and binary IDs for the two Egypt levels.
+    if (day <= 2) {
+        *out++ = char('0' + day);
+    } else {
+        for (int shift = 28; shift >= 0; shift -= 4) *out++ = hex[(day >> shift) & 15];
+    }
     *out++ = '-';
     *out++ = char('0' + stars);
     const char* suffix = temporary ? ".run.tmp" : ".run";
     while ((*out++ = *suffix++)) {}
 }
 
-static bool readBest(Word base, Word ownerId, Word day, Word stars, Record& out, bool assisted = false) {
-    char path[128];
-    recordPath(path, ownerId, day, stars, false, assisted);
-    int fd = native<int>(base, 0x148448, path, 0, 0);
-    if (fd < 0) return false;
+static bool readRecord(Word base, int fd, Word ownerId, Word day, Word stars, Record& out) {
     auto* bytes = reinterpret_cast<Object>(&out);
     Word size = 0;
     while (size < sizeof(Record)) {
@@ -209,8 +262,20 @@ static bool readBest(Word base, Word ownerId, Word day, Word stars, Record& out,
     }
     char tail;
     int extra = native<int>(base, 0x148460, fd, &tail, 1);
+    if (extra != 0 || !AdventureRecords::valid(out, ownerId, day, stars, size)) return false;
+    if (out.version == 1) out.loadout.slots = 0;
+    if (out.version < AdventureRecords::schema) out.tacticalCukeUses = AdventureRecords::unknownCukeUses;
+    return true;
+}
+
+static bool readBest(Word base, Word ownerId, Word day, Word stars, Record& out, bool assisted = false) {
+    char path[128];
+    recordPath(path, ownerId, day, stars, false, assisted);
+    int fd = native<int>(base, 0x148448, path, 0, 0);
+    if (fd < 0) return false;
+    bool valid = readRecord(base, fd, ownerId, day, stars, out);
     native<int>(base, 0x147b90, fd);
-    return size == sizeof(Record) && extra == 0 && AdventureRecords::valid(out, ownerId, day, stars);
+    return valid;
 }
 
 static bool writeBytes(Word base, const void* data, Word length, const char* path, const char* temp) {
@@ -236,11 +301,6 @@ static bool writeBest(Word base, const Record& record, bool assisted) {
     recordPath(temp, record.owner, record.day, record.stars, true, assisted);
     return writeBytes(base, &record, sizeof(Record), path, temp);
 }
-
-struct WeakRef {
-    Word id;
-    Word serial;
-};
 
 static bool capturePlant(Word base, Object registry, Object object, Plant& out) {
     if (!object || !field<unsigned char>(object, 0xb4)
@@ -286,10 +346,13 @@ extern "C" void asterAdventureWin(Word base, Object board) {
     Object store = ownerStore(base);
     if (native<Object>(base, 0x7a98dc, store) != current.profile) return;
     if (current.stars && field<unsigned char>(board, 0x7fe)) return;
-    current.clock.sample(now(base), true);
     Word elapsed = current.clock.milliseconds();
     current.board = nullptr;
     if (!elapsed) return;
+#ifdef ASTER_SOCIAL_LEVELS
+    // Assisted runs do not compete with unassisted personal times.
+    if (current.friendSunUsed) return;
+#endif
 
     auto* bytes = reinterpret_cast<unsigned char*>(&completed);
     for (Word i = 0; i < sizeof(Record); ++i) bytes[i] = 0;
@@ -298,7 +361,24 @@ extern "C" void asterAdventureWin(Word base, Object board) {
     completed.day = current.day;
     completed.stars = current.stars;
     completed.elapsedMs = elapsed;
-    captureFormation(base, completed);
+#ifdef ASTER_SOCIAL_LEVELS
+    completed.tacticalCukeUses = current.tacticalCukeUses;
+#else
+    completed.tacticalCukeUses = AdventureRecords::unknownCukeUses;
+#endif
+    if (field<Word>(board, 0xb4) == 9 && field<Word>(board, 0xb8) == 5 &&
+        AdventureRecords::formationSupported(field<const char*>(board, 0xc4))) {
+        captureFormation(base, completed);
+#ifdef ASTER_SOCIAL_LEVELS
+        completed.loadout.slots = runLoadout.slots;
+        for (Word slot = 0; slot < runLoadout.slots; ++slot) {
+            const auto& card = runLoadout.cards[slot];
+            if (!card.level) continue;
+            for (Word i = 0; card.type[i]; ++i) completed.loadout.cards[slot].type[i] = card.type[i];
+            completed.loadout.cards[slot].level = card.level;
+        }
+#endif
+    }
     completed.checksum = AdventureRecords::digest(completed);
     hasCompleted = AdventureRecords::valid(completed, current.owner, current.day, current.stars);
     if (!hasCompleted) return;
@@ -311,8 +391,9 @@ extern "C" void asterAdventureWin(Word base, Object board) {
     bool haveBest = readBest(base, current.owner, current.day, current.stars, prior, assisted);
     bool saved = (!haveBest || completed.elapsedMs < prior.elapsedMs) && writeBest(base, completed, assisted);
     native<int>(base, 0x147adc, 4, "AsterAdventure",
-        "clear egypt%u stars=%u time_ms=%u plants=%u best_saved=%u assisted=%u",
-        completed.day, completed.stars, completed.elapsedMs, completed.count, Word(saved), Word(assisted));
+        "clear level=%s stars=%u time_ms=%u plants=%u best_saved=%u assisted=%u",
+        field<const char*>(board, 0xc4), completed.stars, completed.elapsedMs, completed.count,
+        Word(saved), Word(assisted));
     if (assisted) hasCompleted = false;
 }
 
@@ -322,63 +403,13 @@ extern "C" const Record* asterAdventureLast(Word base) {
 
 extern "C" bool asterAdventureBest(Word base, Word day, Word stars, Record* out) {
     Word id = owner(ownerStore(base));
-    return out && id != ~0U && day >= 1 && day <= 2 && stars <= 3
+    return out && id != ~0U && day && stars <= 3
         && readBest(base, id, day, stars, *out);
 }
 
 #ifdef ASTER_SOCIAL_LEVELS
+namespace { static void updateAdventureClockHud(Word base); }
 #include "social_levels.h"
 #endif
 
-struct Color {
-    int red, green, blue, alpha;
-};
-
-static void rectangle(Word base, Object graphics, int x, int y, int width, int height) {
-    constexpr int left = 438;
-    constexpr int top = 60;
-    constexpr int scale = 2;
-    native<void>(base, 0x1167010, graphics, left + x * scale, top + y * scale,
-        width * scale, height * scale);
-}
-
-static void digit(Word base, Object graphics, unsigned value, int x, int y) {
-    static constexpr unsigned char masks[] = {
-        0x3f, 0x06, 0x5b, 0x4f, 0x66, 0x6d, 0x7d, 0x07, 0x7f, 0x6f
-    };
-    struct Segment {
-        unsigned char x, y, width, height;
-    };
-    static constexpr Segment segments[] = {
-        {2, 0, 6, 2}, {8, 2, 2, 5}, {8, 9, 2, 5}, {2, 14, 6, 2},
-        {0, 9, 2, 5}, {0, 2, 2, 5}, {2, 7, 6, 2}
-    };
-    for (unsigned i = 0; i < 7; ++i) {
-        if (!(masks[value] & (1U << i))) continue;
-        const Segment& s = segments[i];
-        rectangle(base, graphics, x + s.x, y + s.y, s.width, s.height);
-    }
-}
-
-extern "C" void asterAdventureDrawClock(Word base, Object board, Object graphics) {
-    if (!graphics || current.board != board || !sameRun(base, board) ||
-        field<Word>(board, 0xc0) != 5 || field<Word>(board, 0x7f4)) return;
-    Word tenths = current.clock.milliseconds() / 100;
-    Word minutes = tenths / 600;
-    Word seconds = tenths / 10 % 60;
-    const Color previous = field<Color>(graphics, 0x4c);
-    constexpr Color background{22, 25, 17, 172};
-    constexpr Color numbers{255, 243, 191, 255};
-    native<void>(base, 0x1166c30, graphics, &background);
-    rectangle(base, graphics, -6, -5, 84, 26);
-    native<void>(base, 0x1166c30, graphics, &numbers);
-    digit(base, graphics, minutes / 10, 0, 0);
-    digit(base, graphics, minutes % 10, 12, 0);
-    rectangle(base, graphics, 26, 4, 2, 2);
-    rectangle(base, graphics, 26, 10, 2, 2);
-    digit(base, graphics, seconds / 10, 32, 0);
-    digit(base, graphics, seconds % 10, 44, 0);
-    rectangle(base, graphics, 56, 14, 2, 2);
-    digit(base, graphics, tenths % 10, 62, 0);
-    native<void>(base, 0x1166c30, graphics, &previous);
-}
+#include "arena_clock.h"

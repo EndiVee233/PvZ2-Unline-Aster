@@ -26,7 +26,7 @@ struct Reward {
     unsigned amount;
 };
 
-#include "toolbox_rewards.inc"
+#include "annual_rewards.inc"
 
 // Only the sign-in screen reads this view of the original DailyRewardConfig.
 struct Calendar {
@@ -46,13 +46,15 @@ static constexpr unsigned signDate = 0x3b4;
 static constexpr unsigned signTileClaimed = 0x3c8;
 static constexpr unsigned noOwner = ~0U;
 static Reward rewards[31];
-static const char* nativeAliases[PlantCount];
-struct TileLabels { const char32_t* lines[4]; };
+static DayReward resolvedRewards[31];
+static const char* nativeAliases[unsigned(Item::Count)];
+struct TileLabels { const char32_t* lines[2]; };
 static TileLabels tileLabels[31];
 static const char32_t* todayLabels[2];
 static bool calendarClaimed;
 static Calendar calendar;
 static unsigned calendarOwner = noOwner;
+static Object calendarPlayer;
 static int calendarDay = 0;
 static bool openingCalendar;
 
@@ -88,9 +90,39 @@ static int monthLength(const CivilDate& date) {
 }
 
 static const DayReward* monthRewards(const CivilDate& date) {
-    constexpr int months = sizeof(toolboxRewards) / sizeof(toolboxRewards[0]);
-    const int index = date.monthKey() - firstRewardMonth;
-    return toolboxRewards[index < 0 ? 0 : index >= months ? months - 1 : index];
+    return annualRewards[date.month - 1];
+}
+
+static const char*& nativeAlias(Address base, Item item) {
+    const unsigned index = item == Item::Gold || item == Item::Gems ? unsigned(Item::None) : unsigned(item);
+    auto& alias = nativeAliases[index];
+    if (!alias) {
+        char allocator = 0;
+        native<void>(base, 0x14ed0e1, &alias, items[index].alias, &allocator);
+    }
+    return alias;
+}
+
+static bool sameReward(DayReward left, DayReward right) {
+    return left.kind == right.kind && left.item == right.item && left.amount == right.amount;
+}
+
+static DayReward resolveReward(Address base, Object player, DayReward reward) {
+    if (reward.kind == Kind::Plant && native<bool>(base, 0x708e18, player, &nativeAlias(base, reward.item)))
+        return {Kind::PlantShard, reward.item, 10};
+    if (reward.kind == Kind::Costume && native<bool>(base, 0x708890, player, &nativeAlias(base, reward.item), 0U))
+        return {Kind::CostumeShard, reward.item, 10};
+    return reward;
+}
+
+static unsigned tileKind(Kind kind) {
+    switch (kind) {
+    case Kind::Coins: return 0;
+    case Kind::Diamonds: return 1;
+    case Kind::WorldKey: return 2;
+    // The native plant tile requires a shop product. Resolve the icon separately.
+    default: return 9;
+    }
 }
 
 static void releaseLabel(Address base, const char32_t*& label) {
@@ -116,24 +148,25 @@ static bool prepareCalendar(Address base, Object player, Seconds when) {
     }
     field<unsigned char>(player, signTileClaimed) = claimed;
 
-    if (calendar.year != today.year || calendar.month != today.month) {
+    const unsigned user = owner(base);
+    const bool samePanelDay = calendarDay == today.dayKey() && calendarOwner == user && calendarPlayer == player;
+    if (calendar.year != today.year || calendar.month != today.month || calendarPlayer != player) {
         for (auto& tile : tileLabels) {
             for (auto& line : tile.lines) releaseLabel(base, line);
         }
     }
-    if (calendarDay != today.dayKey()) {
+    if (!samePanelDay) {
         for (auto& label : todayLabels) releaseLabel(base, label);
     }
     const DayReward* month = monthRewards(today);
     for (int index = 0; index < days; ++index) {
-        const DayReward& day = month[index];
-        auto& alias = nativeAliases[day.plant];
-        if (!alias) {
-            char allocator = 0;
-            native<void>(base, 0x14ed0e1, &alias, plants[day.plant].alias, &allocator);
+        if (samePanelDay && claimed && index + 1 == today.day) continue;
+        const DayReward day = resolveReward(base, player, month[index]);
+        if (!sameReward(day, resolvedRewards[index])) {
+            for (auto& line : tileLabels[index].lines) releaseLabel(base, line);
         }
-        // The original calendar's generic plant-fragment view uses type 5.
-        rewards[index] = {alias, 5, day.shards};
+        resolvedRewards[index] = day;
+        rewards[index] = {nativeAlias(base, day.item), tileKind(day.kind), day.amount};
     }
     calendar.unusedVtable = 0;
     calendar.version = 1;
@@ -143,7 +176,8 @@ static bool prepareCalendar(Address base, Object player, Seconds when) {
     calendar.begin = rewards;
     calendar.end = rewards + days;
     calendar.capacity = calendar.end;
-    calendarOwner = owner(base);
+    calendarOwner = user;
+    calendarPlayer = player;
     calendarDay = today.dayKey();
     calendarClaimed = claimed;
     return true;
@@ -185,13 +219,24 @@ static void makeLabel(Address base, const char32_t** output, const char32_t* tex
 }
 
 extern "C" void asterDailySignTile(Address base, Object tile, const Reward* reward) {
-    // The fragment artwork path assumes a live shop product. Use the stock
-    // generic tile and give it the complete bundle text without a shop lookup.
-    constexpr unsigned genericTile = 9;
-    const Reward display{reward->alias, genericTile, 0};
+    const Reward display{reward->alias, reward->type, 0};
     native<void>(base, 0xf6347c, tile, &display, 1);
     const int index = reward - rewards;
-    const DayReward& day = monthRewards({calendar.year, calendar.month, 1})[index];
+    if (index < 0 || index >= calendar.end - calendar.begin) return;
+    const DayReward day = resolvedRewards[index];
+    const ItemSpec& item = items[unsigned(day.item)];
+    if (reward->type == 9) {
+        struct ImageDescriptor { unsigned reserved[3]; const char* key; unsigned ref[2]; };
+        const bool costume = day.kind == Kind::Costume || day.kind == Kind::CostumeShard;
+        ImageDescriptor descriptor;
+        descriptor.key = costume ? item.costumeIcon : item.icon;
+        descriptor.ref[0] = descriptor.ref[1] = 0;
+        struct ImageSkin { unsigned drawMode, image, options[6]; } skin;
+        skin.image = 0;
+        native<void>(base, 0x7e8a28, &skin, &descriptor, 2U);
+        native<void>(base, 0x1d9bb4, &descriptor.ref, 0U, 0U, 0U);
+        if (skin.image) field<unsigned>(tile, 0xa4) = skin.image;
+    }
     char32_t text[24];
     char32_t* end = writeLabel(text, U"", index + 1);
     *end++ = U'日';
@@ -204,13 +249,17 @@ extern "C" void asterDailySignTile(Address base, Object tile, const Reward* rewa
     }
     auto& labels = tileLabels[index];
     if (!labels.lines[0]) {
-        makeLabel(base, &labels.lines[0], plants[day.plant].name);
-        *writeLabel(text, U"碎片 ×", day.shards) = 0;
+        char32_t* name = text;
+        for (const auto* c = item.name; *c; ++c) *name++ = *c;
+        static constexpr char32_t suffixes[][5] = {
+            U"", U"", U"", U"整株", U"碎片", U"装扮", U"装扮碎片", U"", U"",
+        };
+        const char32_t* suffix = suffixes[unsigned(day.kind)];
+        while (*suffix) *name++ = *suffix++;
+        *name = 0;
+        makeLabel(base, &labels.lines[0], text);
+        *writeLabel(text, U"×", day.amount) = 0;
         makeLabel(base, &labels.lines[1], text);
-        *writeLabel(text, U"金币 ", day.coins) = 0;
-        makeLabel(base, &labels.lines[2], text);
-        *writeLabel(text, U"钻石 ", day.diamonds) = 0;
-        makeLabel(base, &labels.lines[3], text);
     }
 }
 
@@ -249,42 +298,107 @@ extern "C" void asterDailySignDraw(Address base, const DrawRegisters& args, cons
     }
 }
 
-static bool walletFits(Object player, unsigned offset, unsigned amount) {
+static unsigned walletBalance(Object player, unsigned offset) {
     const unsigned salt = field<unsigned>(player, offset + 4);
     const unsigned encoded = field<unsigned>(player, offset);
     const unsigned shift = salt & 31;
-    const unsigned balance = ((encoded >> shift) | (encoded << ((32 - shift) & 31))) ^ salt;
-    return balance <= 0x7fffffffU - amount;
+    return ((encoded >> shift) | (encoded << ((32 - shift) & 31))) ^ salt;
 }
 
-static bool shardsFit(Object player, unsigned plantId, unsigned amount) {
+static unsigned plantBalance(Object player, unsigned plantId) {
     struct ShardBalance { unsigned id, count; };
     const auto* entry = field<const ShardBalance*>(player, 0x208);
     const auto* end = field<const ShardBalance*>(player, 0x20c);
     for (; entry != end; ++entry) {
-        if (entry->id == plantId) return entry->count <= 0x7fffffffU - amount;
+        if (entry->id == plantId) return entry->count;
     }
-    return true;
+    return 0;
+}
+
+static unsigned costumeBalance(Object player, unsigned plantId) {
+    struct CostumeBalance { unsigned id; const unsigned* count; unsigned end, capacity; };
+    const auto* entry = field<const CostumeBalance*>(player, 0x3c);
+    const auto* end = field<const CostumeBalance*>(player, 0x40);
+    for (; entry != end; ++entry) {
+        if (entry->id == plantId && entry->count) return entry->count[0];
+    }
+    return 0;
+}
+
+static unsigned accessoryBalance(Object player, const char* name) {
+    struct AccessoryBalance { const char* name; unsigned count; };
+    const auto* entry = field<const AccessoryBalance*>(player, 0x2d8);
+    const auto* end = field<const AccessoryBalance*>(player, 0x2dc);
+    for (; entry != end; ++entry) {
+        const char* left = entry->name;
+        const char* right = name;
+        while (*left && *left == *right) { ++left; ++right; }
+        if (*left == *right) return entry->count;
+    }
+    return 0;
+}
+
+static unsigned balance(Address base, Object player, DayReward day, const char* const* alias) {
+    const unsigned id = items[unsigned(day.item)].id;
+    switch (day.kind) {
+    case Kind::Coins: return walletBalance(player, 0x98);
+    case Kind::Diamonds: return walletBalance(player, 0xa0);
+    case Kind::Plant: return native<bool>(base, 0x708e18, player, alias);
+    case Kind::PlantShard: return plantBalance(player, id);
+    case Kind::Costume: return native<bool>(base, 0x708890, player, alias, 0U);
+    case Kind::CostumeShard: return costumeBalance(player, id);
+    case Kind::WorldKey: return native<unsigned>(base, 0x706da0, player, alias);
+    case Kind::AccessoryShard: return accessoryBalance(player, *alias);
+    default: return 0;
+    }
+}
+
+static void grant(Address base, Object player, DayReward day, const char* const* alias) {
+    const unsigned amount = day.amount;
+    switch (day.kind) {
+    case Kind::Coins: native<void>(base, 0x746164, player, amount); break;
+    case Kind::Diamonds: native<void>(base, 0x745220, player, amount, 0U); break;
+    case Kind::Plant:
+        native<void>(base, 0x744554, player, alias, 1U);
+        native<void>(base, 0x7233ec, player, alias, 0U);
+        break;
+    case Kind::PlantShard: native<void>(base, 0x729ebc, player, alias, amount); break;
+    case Kind::Costume:
+        native<void>(base, 0x722624, player, alias, 0U);
+        native<void>(base, 0x717c24, player, alias, 0U);
+        break;
+    case Kind::CostumeShard: native<void>(base, 0x729e8c, player, alias, 0U, amount, 1U); break;
+    case Kind::WorldKey: native<void>(base, 0x7492d4, player, alias, amount); break;
+    case Kind::AccessoryShard: native<void>(base, 0x729440, player, alias, amount); break;
+    default: break;
+    }
 }
 
 extern "C" bool asterDailySignCommit(Address base, Object player, const Reward* reward) {
-    CivilDate today{};
-    if (calendarOwner == noOwner || owner(base) != calendarOwner || profile(base) != player ||
+    CivilDate today{}, claimedDate{};
+    if (!player || player != calendarPlayer || calendarOwner == noOwner ||
+        owner(base) != calendarOwner || profile(base) != player ||
         !localDate(base, now(base), today) || today.dayKey() != calendarDay ||
+        !localDate(base, field<Seconds>(player, signDate), claimedDate) || claimedDate.dayKey() != calendarDay ||
         field<unsigned char>(player, signClaimed)) return false;
     const int index = field<int>(player, signIndex);
     if (index != today.day || index > calendar.end - calendar.begin || reward != rewards + index - 1)
         return false;
-    const DayReward& day = monthRewards(today)[index - 1];
-    if (!walletFits(player, 0x98, day.coins) || !walletFits(player, 0xa0, day.diamonds) ||
-        !shardsFit(player, plants[day.plant].nativeId, day.shards)) return false;
+    const DayReward day = resolveReward(base, player, monthRewards(today)[index - 1]);
+    if (!sameReward(day, resolvedRewards[index - 1]) || day.kind == Kind::None) return false;
+    const unsigned before = balance(base, player, day, &reward->alias);
+    const unsigned limit = day.kind == Kind::WorldKey ? 99 : 0x7fffffffU;
+    if (before > limit - day.amount) return false;
 
     // These inventory changes and the claim flags belong to the same native profile.
     field<unsigned char>(player, signClaimed) = 1;
     field<unsigned char>(player, signTileClaimed) = 1;
+    grant(base, player, day, &reward->alias);
+    if (balance(base, player, day, &reward->alias) != before + day.amount) {
+        field<unsigned char>(player, signClaimed) = 0;
+        field<unsigned char>(player, signTileClaimed) = 0;
+        return false;
+    }
     calendarClaimed = true;
-    native<void>(base, 0x729ebc, player, &reward->alias, unsigned(day.shards));
-    native<void>(base, 0x746164, player, unsigned(day.coins));
-    native<void>(base, 0x745220, player, unsigned(day.diamonds), 0);
     return true;
 }

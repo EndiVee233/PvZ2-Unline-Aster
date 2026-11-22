@@ -15,7 +15,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def patch_native(native, ndk, output, *, world_resources=False, mount_campaign=False,
-                 guard_chooser_resume=False, offline_sign_in=False):
+                 guard_chooser_resume=False, offline_sign_in=False, refresh_sign_in=False):
+    if refresh_sign_in and (not offline_sign_in or world_resources or mount_campaign or guard_chooser_resume):
+        raise ValueError("Refreshing sign-in reuses the installed HUD and world patches")
     output.mkdir(parents=True, exist_ok=True)
     elf = ELFFile(BytesIO(native))
     loads = [(i, s) for i, s in enumerate(elf.iter_segments()) if s["p_type"] == "PT_LOAD"]
@@ -31,9 +33,11 @@ def patch_native(native, ndk, output, *, world_resources=False, mount_campaign=F
              "-fno-stack-protector", "-fno-exceptions", "-fno-rtti", "-fno-unwind-tables",
              "-fno-asynchronous-unwind-tables"]
     obj, linked, ld = (output / ("auto-pickup." + suffix) for suffix in ("o", "elf", "ld"))
-    subprocess.run([tools / "clang++.exe", *flags, "-c", ROOT / "src/auto-pickup/auto_pickup.cpp",
-                    "-o", obj], check=True)
-    objects = [obj]
+    objects = []
+    if not refresh_sign_in:
+        subprocess.run([tools / "clang++.exe", *flags, "-c", ROOT / "src/auto-pickup/auto_pickup.cpp",
+                        "-o", obj], check=True)
+        objects.append(obj)
     if offline_sign_in:
         sign = output / "daily-sign-in.o"
         subprocess.run([tools / "clang++.exe", *flags, "-c", ROOT / "src/daily-sign-in/daily_sign_in.cpp",
@@ -44,7 +48,7 @@ def patch_native(native, ndk, output, *, world_resources=False, mount_campaign=F
             for section in ELFFile(handle).iter_sections():
                 if section["sh_type"] == "SHT_REL" and "exidx" not in section.name:
                     assert all(r["r_info_type"] != 2 for r in section.iter_relocations()), section.name
-    ld.write_text(f"""ENTRY(asterPickupUpdate)
+    ld.write_text(f"""ENTRY({"asterDailySignOpen" if refresh_sign_in else "asterPickupUpdate"})
 SECTIONS {{
     . = {text_start}; .payload : {{ *(.text*) *(.rodata*) }}
     . = {variables_start}; .runtime : {{ *(.data*) *(.bss*) *(COMMON) *(.got*) }}
@@ -75,66 +79,67 @@ SECTIONS {{
         payload.extend(encoded)
         hooks[site] = (address, branch(site, address, link))
 
-    wrap(0x8e6114, 0xeb45278d, f"""
-        push {{r0-r4,lr}}
-        mov r1,r4
-        {get_base}
-        bl #{symbols["asterPickupSettings"]}
-        pop {{r0-r4,lr}}
-        b #{0x8e6114 + 8 + 4 * 0x45278d}
-    """, True)
-    wrap(0x8e8884, 0xea451dba, f"""
-        push {{r0-r4,lr}}
-        mov r2,r1
-        mov r1,r0
-        {get_base}
-        bl #{symbols["asterPickupClick"]}
-        cmp r0,#2
-        moveq r1,#9
-        streq r1,[sp,#4]
-        beq stock_click
-        cmp r0,#0
-        pop {{r0-r4,lr}}
-        bxne lr
-        b #{0x8e8884 + 8 + 4 * 0x451dba}
-        stock_click: pop {{r0-r4,lr}}
-        b #{0x8e8884 + 8 + 4 * 0x451dba}
-    """)
-    wrap(0x8e7868, 0xeb4521d4, f"""
-        push {{r0-r4,lr}}
-        mov r1,r0
-        {get_base}
-        bl #{symbols["asterPickupTitle"]}
-        cmp r0,#0
-        pop {{r0-r4,lr}}
-        bxne lr
-        b #{0x8e7868 + 8 + 4 * 0x4521d4}
-    """, True)
-    wrap(0x8e7b34, 0xeb45212d, f"""
-        push {{r0-r4,lr}}
-        mov r2,r1
-        mov r1,r0
-        {get_base}
-        bl #{symbols["asterPickupRows"]}
-        cmp r0,#0
-        pop {{r0-r4,lr}}
-        beq #{0x8e7b34 + 8 + 4 * 0x45212d}
-        b #0x8e7be4
-    """, True)
-    for vtable, update in ((0x178b860, 0x289004), (0x178ae38, 0x27811c), (0x178a870, 0x27811c)):
-        assert struct.unpack_from("<I", native, file_offset(elf, vtable + 0xac))[0] == update
-        assert struct.unpack_from("<I", native, file_offset(elf, vtable + 0xe4))[0] == 0x27b584
-    # Native Sun::Update calls this base method before its own collection
-    # check. Plant Food uses the same method directly.
-    wrap(0x27811c, 0xe92d4878, f"""
-        push {{r0-r4,lr}}
-        mov r1,r0
-        {get_base}
-        bl #{symbols["asterPickupUpdate"]}
-        pop {{r0-r4,lr}}
-        .word 0xe92d4878
-        b #0x278120
-    """)
+    if not refresh_sign_in:
+        wrap(0x8e6114, 0xeb45278d, f"""
+            push {{r0-r4,lr}}
+            mov r1,r4
+            {get_base}
+            bl #{symbols["asterPickupSettings"]}
+            pop {{r0-r4,lr}}
+            b #{0x8e6114 + 8 + 4 * 0x45278d}
+        """, True)
+        wrap(0x8e8884, 0xea451dba, f"""
+            push {{r0-r4,lr}}
+            mov r2,r1
+            mov r1,r0
+            {get_base}
+            bl #{symbols["asterPickupClick"]}
+            cmp r0,#2
+            moveq r1,#9
+            streq r1,[sp,#4]
+            beq stock_click
+            cmp r0,#0
+            pop {{r0-r4,lr}}
+            bxne lr
+            b #{0x8e8884 + 8 + 4 * 0x451dba}
+            stock_click: pop {{r0-r4,lr}}
+            b #{0x8e8884 + 8 + 4 * 0x451dba}
+        """)
+        wrap(0x8e7868, 0xeb4521d4, f"""
+            push {{r0-r4,lr}}
+            mov r1,r0
+            {get_base}
+            bl #{symbols["asterPickupTitle"]}
+            cmp r0,#0
+            pop {{r0-r4,lr}}
+            bxne lr
+            b #{0x8e7868 + 8 + 4 * 0x4521d4}
+        """, True)
+        wrap(0x8e7b34, 0xeb45212d, f"""
+            push {{r0-r4,lr}}
+            mov r2,r1
+            mov r1,r0
+            {get_base}
+            bl #{symbols["asterPickupRows"]}
+            cmp r0,#0
+            pop {{r0-r4,lr}}
+            beq #{0x8e7b34 + 8 + 4 * 0x45212d}
+            b #0x8e7be4
+        """, True)
+        for vtable, update in ((0x178b860, 0x289004), (0x178ae38, 0x27811c), (0x178a870, 0x27811c)):
+            assert struct.unpack_from("<I", native, file_offset(elf, vtable + 0xac))[0] == update
+            assert struct.unpack_from("<I", native, file_offset(elf, vtable + 0xe4))[0] == 0x27b584
+        # Native Sun::Update calls this base method before its own collection
+        # check. Plant Food uses the same method directly.
+        wrap(0x27811c, 0xe92d4878, f"""
+            push {{r0-r4,lr}}
+            mov r1,r0
+            {get_base}
+            bl #{symbols["asterPickupUpdate"]}
+            pop {{r0-r4,lr}}
+            .word 0xe92d4878
+            b #0x278120
+        """)
 
     if world_resources:
         world_entry = 0x415048
@@ -216,8 +221,18 @@ SECTIONS {{
         """)
 
     if offline_sign_in:
+        previous_targets = {
+            0xa1c920: 0x1a68354, 0x418504: 0x1a6836c,
+            0xf655c8: 0x1a68380, 0xf64c4c: 0x1a68394, 0xf68f38: 0x1a683a8,
+            0xf64c64: 0x1a683f0, 0xf629bc: 0x1a6840c, 0xf68f58: 0x1a6845c,
+        }
+
+        def wrap_sign(site, expected, source, link=False):
+            if refresh_sign_in:
+                expected = struct.unpack("<I", branch(site, previous_targets[site], link))[0]
+            wrap(site, expected, source, link)
         # The native widget has already checked pointer release and played its click sound.
-        wrap(0xa1c920, 0xe3a01003, f"""
+        wrap_sign(0xa1c920, 0xe3a01003, f"""
             {get_base}
             bl #{symbols["asterDailySignOpen"]}
             b #0xa1c8c0
@@ -230,31 +245,32 @@ SECTIONS {{
         }
         for site, symbol in sign_config_sites.items():
             expected = struct.unpack("<I", branch(site, 0x41545c, True))[0]
-            wrap(site, expected, f"""
+            wrap_sign(site, expected, f"""
                 {get_base}
                 b #{symbols[symbol]}
             """, True)
-        wrap(0x418518, 0xeb28d4b5, """
-            cmp r0,#0
-            movne r0,#1
-            bx lr
-        """, True)
-        # Only this calendar uses local civil time. The server clock stays untouched.
-        wrap(0xf64e24, 0xeb0041a0, """
-            mov r0,#0
-            bl #0x147824
-            b #0xf64e2c
-        """)
-        wrap(0xf64e78, 0xebd2c177, "b #0xf64f1c")
-        # Earlier dates might have been skipped. Only today uses the claim flag.
-        wrap(0xf64c00, 0xe3a03000, "mov r3,#0\nb #0xf64d34")
-        wrap(0xf64c64, 0xebfffa04, f"""
+        if not refresh_sign_in:
+            wrap(0x418518, 0xeb28d4b5, """
+                cmp r0,#0
+                movne r0,#1
+                bx lr
+            """, True)
+            # Only this calendar uses local civil time. The server clock stays untouched.
+            wrap(0xf64e24, 0xeb0041a0, """
+                mov r0,#0
+                bl #0x147824
+                b #0xf64e2c
+            """)
+            wrap(0xf64e78, 0xebd2c177, "b #0xf64f1c")
+            # Earlier dates might have been skipped. Only today uses the claim flag.
+            wrap(0xf64c00, 0xe3a03000, "mov r3,#0\nb #0xf64d34")
+        wrap_sign(0xf64c64, 0xebfffa04, f"""
             mov r2,r1
             mov r1,r0
             {get_base}
             b #{symbols["asterDailySignTile"]}
         """, True)
-        wrap(0xf629bc, 0xeb113243, f"""
+        wrap_sign(0xf629bc, 0xeb113243, f"""
             push {{r0-r4,lr}}
             mov r1,sp
             add r2,sp,#24
@@ -263,14 +279,15 @@ SECTIONS {{
             add sp,sp,#20
             pop {{pc}}
         """, True)
-        # The old sequential-login footer would show the date as a login count.
-        wrap(0xf6236c, 0xeb081c55, "bx lr", True)
-        wrap(0xf624bc, 0xebe8436b, "bx lr", True)
-        # Today's text conveys claim status without an animation over the amounts.
-        wrap(0xf629e0, 0xebe66215, "bx lr", True)
-        wrap(0xf629f4, 0xebe66210, "bx lr", True)
-        wrap(0xf62cfc, 0xeb0819f1, "bx lr", True)
-        wrap(0xf68f58, 0xebffe784, f"""
+        if not refresh_sign_in:
+            # The old sequential-login footer would show the date as a login count.
+            wrap(0xf6236c, 0xeb081c55, "bx lr", True)
+            wrap(0xf624bc, 0xebe8436b, "bx lr", True)
+            # Today's text conveys claim status without an animation over the amounts.
+            wrap(0xf629e0, 0xebe66215, "bx lr", True)
+            wrap(0xf629f4, 0xebe66210, "bx lr", True)
+            wrap(0xf62cfc, 0xeb0819f1, "bx lr", True)
+        wrap_sign(0xf68f58, 0xebffe784, f"""
             push {{r0-r4,lr}}
             mov r1,r4
             mov r2,r6

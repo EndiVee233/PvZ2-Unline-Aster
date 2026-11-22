@@ -78,6 +78,6 @@ static U regionAction(U b,P panel,U button){
  if(r.state.coins<price){economyNotice(b,"[V93_REGION_COINS_REQUIRED]");return 1;}
  Economy next=r.state;next.coins-=price;next.regionsOpen|=1u<<(zone-1);
  if(!commitProgression(b,m,next))return 1;
- neighbors(b,m);call<void>(b,0x100a864,map);
+ projectGarden(b,m);call<void>(b,0x100a864,map);
  log(b,"region-unlocked",zone,price);return 1;
 }

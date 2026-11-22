@@ -5,6 +5,8 @@ template<class R,class...A>R call(U b,U o,A...a){return reinterpret_cast<R(*)(A.
 static constexpr U NEIGHBOR_ATTACK_FEE=10;
 static constexpr U DAVE_ATTACK_FEE=30;
 static constexpr U THREE_STAR_RAID_COINS=300;
+// Starting balance for the native first-attack tutorial's completion.
+static constexpr U FIRST_ATTACK_COINS=1000;
 #ifdef BOARD_CAMERA_BOUNDS
 #include "board_camera.h"
 #endif
@@ -172,8 +174,8 @@ static void tickProgression(U b);
 #ifdef PVP_REGIONS
 static void projectRegions(U b,P m);
 static bool regionOpen(U zone);
-static void neighbors(U b,P m);
 #endif
+static void projectGarden(U b,P m);
 static U finishProgressionWithGems(U b,P timer);
 #ifdef PVP_EVOLUTION
 static void applyEvolution(U b,P m);
@@ -298,15 +300,15 @@ static void bindBattleArmy(U b,P m){
 }
 static void neighbors(U b,P m){
  if(!regular(b))return;
+#ifdef PVP_REGIONS
+ removeLockedNeighbors(b,m);
+#endif
 #ifdef PVP_RANDOM_NEIGHBORS
  if(!ensureNeighborRoster(b,m))return;
 #endif
 #ifdef PVP_WEEKLY_RULES
  if(!ensureDaveSchedule(b,m))return;
  removeScheduledDaveRecords(b,m);
-#endif
-#ifdef PVP_REGIONS
- removeLockedNeighbors(b,m);
 #endif
 #ifdef PVP_RESIDENT_NEIGHBORS
  removeLocalBusinessRecords(b,m);
@@ -693,7 +695,32 @@ extern "C" P adventureTutorialHintBank(U b,P board,U phase){
 #endif
 static U requestedArenaView;
 #if defined(PVP_DAVE_REFERENCE) && defined(PVP_NEIGHBOR_PROTECTION)
+extern "C" U offlineFirstAttackCoins(){return FIRST_ATTACK_COINS;}
+static bool firstAttackTutorial(U b){
+ P player=profile(b);
+ if(!player||at<U>(player,0x75c)<3||at<U>(player,0x75c)>7)return false;
+ P holder=at<P>(reinterpret_cast<P>(b),0x1821674);
+ P app=holder?at<P>(holder,0):nullptr;
+ if(!app||at<U>(app,0x1218)!=3)return false;
+ P board=at<P>(app,0x6bc);
+ return board&&sameText(at<P>(board,0xc4),"arena_battle_attack_tutorial");
+}
+extern "C" U offlineTutorialResultCoins(U b,U stockCoins){
+ return firstAttackTutorial(b)?FIRST_ATTACK_COINS:stockCoins;
+}
+extern "C" bool offlineTutorialPreviewRewards(U b,P widget,P m){
+ if(at<U>(m,0xa8)!=1||!firstAttackTutorial(b))return false;
+ at<U>(widget,0x118)=1;
+ at<unsigned char>(widget,0xee)=0;
+ at<unsigned char>(widget,0xef)=0;
+ at<U>(widget,0xf0)=0;
+ at<U>(widget,0xf4)=0;
+ at<U>(widget,0xf8)=0;
+ at<U>(widget,0xfc)=FIRST_ATTACK_COINS;
+ return true;
+}
 extern "C" bool offlineScoutRewards(U b,P widget,P m){
+ if(offlineTutorialPreviewRewards(b,widget,m))return true;
  // Clear the unused padding byte even when the native constructor continues.
  at<unsigned char>(widget,0xef)=0;
  const NpcPreset*n=npc(arenaNpc);
@@ -824,19 +851,22 @@ static bool attackBusiness(U b,const BusinessPlot&s){
  log(b,"business-battle-loaded",s.id);return true;
 }
 #endif
+static void projectGarden(U b,P m){
+ neighbors(b,m);
+#ifdef PVP_BUSINESS_MAP
+ projectBusinesses(b,m);
+#endif
+#ifdef PVP_REGIONS
+ projectRegions(b,m);
+#endif
+}
 extern "C" __attribute__((section(".text.entry"))) void offlineGarden(U b){
 #ifdef PVP_PRESET_EDITOR
  if(presetEditing)return;
 #endif
- neighbors(b,manager(b));
+ projectGarden(b,manager(b));
 #ifdef PVP_SILENT_RAIDS
  clearRevenge();
-#endif
-#ifdef PVP_BUSINESS_MAP
- projectBusinesses(b,manager(b));
-#endif
-#ifdef PVP_REGIONS
- projectRegions(b,manager(b));
 #endif
  scene(b,25);}
 #ifdef PVP_LOCAL_DEFENSE_SESSION

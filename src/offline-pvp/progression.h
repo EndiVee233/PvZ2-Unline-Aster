@@ -97,7 +97,7 @@ extern "C" void offlineProgressionInit(U b){
  if(!r.state.initialized){
   Economy next=r.state;next.initialized=1;next.medals=200;
   // Existing offline wallets retain purchases and spending during migration.
-  if(!r.loadedFromDisk)next.coins=1000;
+  if(!r.loadedFromDisk)next.coins=FIRST_ATTACK_COINS;
   next.baseLevel=next.home;next.sunLevel=1;next.campLevel=1;next.producedAt=realNow(b);
   if(!commitProgression(b,m,next))return;log(b,"pvp-initial-resources",next.coins,next.medals);
  }else applyProgression(b,m);

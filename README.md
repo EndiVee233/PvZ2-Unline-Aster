@@ -1,17 +1,5 @@
 # PvZ2-Unline:Aster
 
-## 正式版下载
-
-当前正式版为 **A305**。ARM32 已在 WSA 验收阳光炸弹和 PVP 能量豆修复相关流程。**不推荐 ARM64，优先使用 ARM32。** ARM64 未做设备验收。 [下载最新正式版](https://github.com/EndiVee233/PvZ2-Unline-Aster/releases/latest) · [A305 说明](docs/A305-release.md)
-
-## A272 预发布
-
-埃及第 1、2 天已支持星级自选、离线好友排行榜和棋盘阵型预览。A272 接入了三星罐头解锁，修复了跳档挑战时的星星显示及埃及旧无尽续层的植物停摆。**不推荐 ARM64，优先使用 ARM32。** [下载 A272](https://github.com/EndiVee233/PvZ2-Unline-Aster/releases/tag/A272) · [变更与验收](docs/A272-prerelease.md)
-
-## Unline系列
-- PvZ2:Aster
-- [PvZ2:Iris](https://github.com/EndiVee233/PvZ2-Unline-Iris)
-
 ## 介绍
 一个面向 Windows Subsystem for Android / 普通 Android 的单文件直装版
 

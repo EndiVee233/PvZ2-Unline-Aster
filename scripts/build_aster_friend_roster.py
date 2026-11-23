@@ -1,4 +1,4 @@
-"""Build the ARM32 friend roster, lending cards and map captions over A315."""
+"""Build the ARM32 friend roster and replace its world-map art."""
 import argparse
 from io import BytesIO
 from pathlib import Path
@@ -10,13 +10,14 @@ from elftools.elf.elffile import ELFFile
 from keystone import Ks, KS_ARCH_ARM, KS_MODE_ARM
 
 from build_aster_adventure_records import (
-    CHOOSER_RESTORE, CHOOSER_RESTORE_CALL, patch_friend_entry, payload, social_dex,
+    CHOOSER_RESTORE, CHOOSER_RESTORE_CALL, payload, social_dex,
 )
 from build_aster_hud_pickup import ASSET, BOOTSTRAP, PLAN, create_plan, rebuild_dynamic_bootstrap
 from build_aster_pvp_feedback import pack_apk
 from build_aster_save_path_fix import manifest_version
 from prepare_aster_adventure_levels import write_packet_anchors, write_user_plants
 from prepare_aster_pvp_runtime import file_offset
+from prepare_aster_social_art import add_friend_button_art
 from prepare_profile_memory import branch
 
 
@@ -120,31 +121,31 @@ def patch_guest(engine, ndk, output, old_social, star_overlay):
     return bytes(patched)
 
 
-def build(base, stock, old_social, star_overlay, sdk, ndk, output, signing):
+def build(base, previous, stock, old_social, star_overlay, sdk, ndk, output, signing):
     output.mkdir(parents=True, exist_ok=True)
     write_packet_anchors(stock, output)
-    write_user_plants(base, output)
+    write_user_plants(previous, output)
     copyfile(old_social.with_name("adventure_levels.inc"), output / "adventure_levels.inc")
     with ZipFile(base) as archive:
-        manifest = manifest_version(archive.read("AndroidManifest.xml"), 321, 315, prefix="A")
         engine = patch_guest(archive.read(ENGINE), ndk, output, old_social, star_overlay)
+    with ZipFile(previous) as archive:
+        manifest = manifest_version(archive.read("AndroidManifest.xml"), 322, 321, prefix="A")
         original = archive.read(ASSET)
-        dynamic = patch_friend_entry(original)
+        dynamic = add_friend_button_art(original)
         bootstrap = rebuild_dynamic_bootstrap(archive.read(BOOTSTRAP), output / "bootstrap", original, dynamic)
         dex, = (name for name in archive.namelist() if name.startswith("classes") and name.endswith(".dex")
                 and b"Lcom/popcap/pvz2cthd/AdventureFriendFiles;" in archive.read(name))
     (output / "libSrc.so").write_bytes(engine)
     plan = create_plan(dynamic, output, rgba_atlases=1)
     companion = social_dex(output / "social-dex", sdk)
-    target = output / "PvZ2-Unline-Aster-A321-ARM32-WSA-existing-data.apk"
-    pack_apk(base, {ENGINE: engine, "AndroidManifest.xml": manifest, ASSET: dynamic,
-                    BOOTSTRAP: bootstrap, PLAN: plan, dex: companion}, sdk, target, signing,
-             excluded=("assets/adventure/friends.json",))
+    target = output / "PvZ2-Unline-Aster-A322-ARM32-WSA-existing-data.apk"
+    pack_apk(previous, {ENGINE: engine, "AndroidManifest.xml": manifest, ASSET: dynamic,
+                        BOOTSTRAP: bootstrap, PLAN: plan, dex: companion}, sdk, target, signing)
     print(target)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ("base", "stock", "old-social", "star-overlay", "sdk", "ndk", "output", "signing"):
+    for name in ("base", "previous", "stock", "old-social", "star-overlay", "sdk", "ndk", "output", "signing"):
         parser.add_argument("--" + name, type=Path, required=True)
     build(**vars(parser.parse_args()))

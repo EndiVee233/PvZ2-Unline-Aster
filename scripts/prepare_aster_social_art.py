@@ -174,3 +174,45 @@ def add_social_art(original, archive, cn_user_apk=None):
         if atlas.crop((x, y, x + w, y + h)).tobytes() != image.tobytes():
             raise ValueError("Social sprite changed during packing")
     return built
+
+
+def add_friend_button_art(original):
+    """Place both supplied HUD sprites in unused space in the social atlas."""
+    from prepare_offline_pvp_seagull_hd import texture_section
+
+    bundle = Bundle(original)
+    manifest_index, manifest_path, manifest = bundle.manifest()
+    stem = GROUP + "_1536"
+    group, = (entry for entry in manifest["groups"] if entry["id"] == stem)
+    index, = (i for i, entry in enumerate(bundle.groups) if entry["ID"] == stem)
+    atlas, = (entry for entry in group["resources"] if entry.get("atlas"))
+    (path, image_info), = bundle.files(index)
+    width, height = atlas["width"], atlas["height"]
+    block = bundle.payloads[index]
+    pixels = texture_section(block)
+    if (path != f"ATLASES\\{ATLAS.upper()}.PTX" or image_info[:3] != (1, 0, len(pixels))
+            or image_info[-2:] != (width, height) or len(pixels) != width * height * 4
+            or u32(block, 16) & 1):
+        raise ValueError("Expected the existing uncompressed RGBA social atlas")
+    canvas = Image.frombytes("RGBA", (width, height), pixels)
+    existing = [entry for entry in group["resources"] if entry.get("parent") == atlas["id"]]
+    y = max(entry["ay"] + entry["ah"] for entry in existing) + 4
+    x = 4
+    assets = Path(__file__).resolve().parents[1] / "src/adventure-records/art"
+    for filename, name in (("friend-button.png", "FRIEND_BUTTON"),
+                           ("friend-button-down.png", "FRIEND_BUTTON_DOWN")):
+        with Image.open(assets / filename) as image:
+            if image.mode != "RGBA" or x + image.width + 4 > width or y + image.height + 4 > height:
+                raise ValueError(f"Invalid sprite or no room in the social atlas: {filename}")
+            canvas.paste(image, (x, y))
+            group["resources"].append(dict(
+                id="IMAGE_ASTER_SOCIAL_" + name, type="Image", parent=atlas["id"],
+                path=["images", "1536", "aster_social", name.lower()],
+                slot=manifest["slot_count"], ax=x, ay=y, aw=image.width, ah=image.height, aflags=15,
+            ))
+            x += image.width + 4
+            manifest["slot_count"] += 1
+    offset = u32(block, 40)
+    bundle.payloads[index] = block[:offset] + canvas.tobytes() + block[offset + len(pixels):]
+    bundle.replace_manifest(manifest_index, manifest_path, manifest)
+    return bundle.build()

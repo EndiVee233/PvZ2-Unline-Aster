@@ -835,11 +835,11 @@ static MenuRect userMapSkinBounds(Object sprite, MenuRect box, bool alignLeft, i
 }
 
 static Object friendMapImage(Word base, bool pressed) {
-    // The world-map resource group can be unloaded while a level is open.
+    // Resolve against the current resource group when the map is visible.
     ButtonSkin skin;
-    resolveMenuSkin(base, skin, pressed ? "IMAGE_UI_HUD_WORLDMAP_DAILY_SGIN_REWARD_DOWN" :
-                                         "IMAGE_UI_HUD_WORLDMAP_DAILY_SIGN_REWARD", 2U);
-    if (pressed && !skin.image) resolveMenuSkin(base, skin, "IMAGE_UI_HUD_WORLDMAP_DAILY_SIGN_REWARD", 2U);
+    resolveMenuSkin(base, skin, pressed ? "IMAGE_ASTER_SOCIAL_FRIEND_BUTTON_DOWN" :
+                                         "IMAGE_ASTER_SOCIAL_FRIEND_BUTTON", 2U);
+    if (pressed && !skin.image) resolveMenuSkin(base, skin, "IMAGE_ASTER_SOCIAL_FRIEND_BUTTON", 2U);
     return skin.image;
 }
 
@@ -849,7 +849,7 @@ extern "C" bool asterUserHit(Word base, Object widget, int x, int y) {
     const bool friends = widget == user.friendWidget;
     const auto box = userMapWidgetBounds(widget);
     const auto skin = userMapSkinBounds(friends ? friendMapImage(base, false) : user.mapSkin.image, box,
-                                        !friends && userHasCnArt(), box.height / 10);
+                                        friends || userHasCnArt(), box.height / 10);
     return x >= skin.x && x < skin.x + skin.width && y >= skin.y && y < skin.y + skin.height;
 }
 
@@ -907,9 +907,12 @@ extern "C" void asterUserDraw(Word base, Object widget, Object graphics) {
         if (!sprite) return;
         const auto tint = field<unsigned char>(graphics, 0x64);
         native<void>(base, 0x1166e74, graphics, false);
-        const auto button = userMapSkinBounds(sprite, box, false, box.height / 10);
+        const auto button = userMapSkinBounds(sprite, box, true, box.height / 10);
         userSkinImage(base, graphics, sprite, button);
-        drawMapCaption(base, graphics, button, user.friendCaption, user.friendPressed);
+        const auto font = field<Object>(reinterpret_cast<Object>(base), katong18);
+        const auto ink = user.friendPressed ? MenuColor{218, 227, 220, 255} : katongWhite;
+        drawOutlinedKatong(base, graphics, font, user.friendCaption, float(button.x),
+                           button.y + button.height * 0.52f, float(button.width), ink);
         field<unsigned char>(graphics, 0x64) = tint;
         return;
     }

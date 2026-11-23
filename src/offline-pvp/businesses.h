@@ -7,13 +7,17 @@ struct BusinessRules {
  char terrain[20];
 };
 struct BusinessPlot {U id,zone,position;BusinessKind kind;BusinessRules rules;};
-// Aster's local economy and terrain. Historical footage shows occupied shops.
+// Keep the native Arena level name. The board loader selects each shop's
+// stage definition while preserving Arena UI, input and settlement.
 static const BusinessPlot BUSINESSES[]={
  {0x71000001,3,2,BusinessKind::HotDog,{1,2000,2000,40,20,300,"arena_battle_test"}},
  {0x71000002,3,3,BusinessKind::Store,{1,2000,2000,40,20,300,"arena_battle_test"}}
 };
 static const char32_t* businessName(const BusinessPlot& plot){
  return plot.kind==BusinessKind::HotDog?U"热狗店":U"商店";
+}
+static bool businessLand(const BusinessPlot& plot,U row,U col){
+ return plot.kind!=BusinessKind::HotDog||col<5||(row!=1&&row!=3);
 }
 static void businessTitle(const BusinessPlot& plot,U* title,const U* occupier,bool own){
  U count=0;for(auto p=businessName(plot);*p;++p)title[count++]=*p;

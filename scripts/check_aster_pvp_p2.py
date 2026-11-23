@@ -4,7 +4,7 @@ from pathlib import Path
 import struct
 import sys
 
-from unicorn.arm_const import UC_ARM_REG_R0
+from unicorn.arm_const import UC_ARM_REG_LR, UC_ARM_REG_PC, UC_ARM_REG_R0, UC_ARM_REG_R1, UC_ARM_REG_R2
 
 from check_offline_pvp_v76_focused import Definitions
 
@@ -157,16 +157,29 @@ def check_shop_storage(make_engine, claim_shop, manager):
 
 
 def check_shop_formations(make_engine, battle, claim_shop, manager):
+    from check_aster_pvp_feedback import seal
+
     for index, (count, plant_types) in enumerate(SHOP_LINEUPS):
         engine = make_engine(10, 1000, shops=True)
+        world = ("pirate", "west")[index]
+        battle_name, defense_name = "arena_battle_test", "arena_plant_test"
+        assert engine.resolve_definition(battle_name) == (battle_name,)
         engine.run("offlineGarden")
         engine.scout_shop(index)
+        assert engine.resolve_definition(battle_name) == (f"arena_shop_{world}_battle",)
+        assert engine.resolve_definition("pirate1") == ("pirate1",)
+        engine.missing_definition = f"arena_shop_{world}_battle"
+        assert engine.resolve_definition(battle_name) == (engine.missing_definition, battle_name)
+        engine.missing_definition = None
         battle.board(engine)
         original = engine.plants()
         plants = list(struct.iter_unpack("<III", original))
         assert len(plants) == count and {plant[0] for plant in plants} == plant_types
         cells = {(row, column) for _, row, column in plants}
-        assert len(cells) == count and all(row < 5 and column < 9 for row, column in cells)
+        def is_land(row, col):
+            return row < 5 and col < 9 and (index != 0 or row not in (1, 3) or col < 5)
+
+        assert len(cells) == count and all(is_land(row, col) for row, col in cells)
         start, end = (engine.get(manager + offset) for offset in (0x90, 0x94))
         assert {(engine.get(p), engine.get(p+4)) for p in range(start, end, 16)} == {
             (plant, 1) for plant in plant_types
@@ -178,8 +191,15 @@ def check_shop_formations(make_engine, battle, claim_shop, manager):
         engine.run("offlineTrainingTick", engine.get(manager + 0x20))
         claim_shop(engine, index)
         assert engine.edit(index) == 1 and engine.plants() == original
-        destination = next((row, col) for row in range(5) for col in range(9) if (row, col) not in cells)
+        assert engine.resolve_definition(defense_name) == (f"arena_shop_{world}_defense",)
+        destination = next((row, col) for row in range(5) for col in range(9)
+                           if (row, col) not in cells and is_land(row, col))
         plant = engine.get(manager + 0x84)
+        if index == 0:
+            engine.put(plant + 4, 1)
+            engine.put(plant + 8, 7)
+            engine.save()
+            assert not any("-shop-" in path for path in engine.files)
         engine.put(plant + 4, destination[0])
         engine.put(plant + 8, destination[1])
         moved = engine.plants()
@@ -188,6 +208,22 @@ def check_shop_formations(make_engine, battle, claim_shop, manager):
         restarted = make_engine(10, source=engine)
         restarted.run("offlineGarden")
         assert restarted.edit(index) == 1 and restarted.plants() == moved
+        if index == 0:
+            # A rectangular-board save can contain a plant on a water tile.
+            path, = (p for p in engine.files if p.endswith("-shop-71000001.def"))
+            envelope = bytearray(engine.files[path])
+            old_formation = envelope[20:]
+            struct.pack_into("<II", old_formation, 28, 1, 7)
+            seal(old_formation, 20)
+            envelope[20:] = old_formation
+            seal(envelope, 16)
+            engine.files[path] = envelope
+            legacy = make_engine(10, source=engine)
+            legacy.run("offlineGarden")
+            assert legacy.edit(index) == 1
+            relocated = list(struct.iter_unpack("<III", legacy.plants()))
+            assert relocated[0] == (plants[0][0], 1, 3)
+            assert relocated[1:] == plants[1:] and legacy.files[path] == envelope
 
 
 def check_matching(make_engine):
@@ -256,6 +292,35 @@ def check(folder):
     core.OUT = folder
     manager = core.M
     class Engine(garrison.GarrisonEngine):
+        def __init__(self):
+            super().__init__()
+            self.definitions = []
+            self.definition_handle = 0
+            self.missing_definition = None
+
+        def hook(self, emu, address, size, data):
+            off = address - core.BASE
+            out = emu.reg_read(UC_ARM_REG_R0)
+            if off == 0x440dc4:
+                name = self.txt(self.get(emu.reg_read(UC_ARM_REG_R2)))
+                self.definitions.append(name)
+                self.definition_handle = out
+                self.put(out, int(name != self.missing_definition))
+            elif off == 0x1da034 and self.definition_handle and emu.reg_read(UC_ARM_REG_R1) == self.definition_handle:
+                out = self.get(self.definition_handle)
+            else:
+                return super().hook(emu, address, size, data)
+            emu.reg_write(UC_ARM_REG_R0, out)
+            emu.reg_write(UC_ARM_REG_PC, emu.reg_read(UC_ARM_REG_LR))
+
+        def resolve_definition(self, name):
+            self.definitions.clear()
+            out, ref = self.alloc(8), self.alloc(4)
+            self.string(ref, name)
+            self.stub(0x225a54, out, manager, ref)
+            self.definition_handle = 0
+            return tuple(self.definitions)
+
         def state(self):
             return core.BASE + self.exports["_ZL14economyRuntime"] + 16
 

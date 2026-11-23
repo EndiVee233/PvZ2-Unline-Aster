@@ -7,9 +7,11 @@
 | 热狗店 | 豌豆射手、寒冰射手、坚果、高坚果、火龙草、地刺、弹簧豆 | 13 | [热狗店实录 04:36–04:43](https://www.bilibili.com/video/BV1GkyezmECn/?t=276) |
 | 商店 | 豌豆射手、寒冰射手、回旋镖射手、西瓜投手、菜问、白萝卜、仙桃、竹笋 | 21 | [西部咖啡馆实录 06:12](https://www.bilibili.com/video/BV1GkyezmECn/?t=372) |
 
-录像里的热狗店已经易主。商店的植物参考取自西部咖啡馆，因为当前没有 Aster 所用 STORE 店种的空店棋盘可供比对。两套初始格位按现有棋盘重新布置，原服阵容、阶级和地形资料留待补证。2018 年的攻略区分了空店和占领后的店面，附图中的咖啡店已经由玩家持有。[旧版夺店攻略第 9 节](https://jingyan.baidu.com/article/bad08e1e27df2209c951215d.html)
+录像里的热狗店已经易主。商店的植物参考取自西部咖啡馆，因为当前没有 Aster 所用 STORE 店种的空店棋盘可供比对。两套初始格位由 Aster 布置，原服空店的阵容和阶级资料留待补证。2018 年的攻略区分了空店和占领后的店面，附图中的咖啡店已经由玩家持有。[旧版夺店攻略第 9 节](https://jingyan.baidu.com/article/bad08e1e27df2209c951215d.html)
 
 初次侦察、开战和夺店后第一次布防共用初始阵容。商铺布防仍只能移动原有植物，已保存的驻防阵容继续读取对应店铺的存档。
+
+A310 改用录像中的世界地形。热狗店用海盗港湾，第 2、4 路右侧无甲板，商店用狂野西部的完整棋盘。侦察、开战和调整防御共享各自的地形，继续走花园战争的战斗和结算流程。热狗店的旧驻防若有植物位于水道，会优先移到同一路的最近空格，原存档在玩家保存布防时才更新。[海盗港湾 04:36](https://www.bilibili.com/video/BV1GkyezmECn/?t=276) · [狂野西部 06:12](https://www.bilibili.com/video/BV1GkyezmECn/?t=372)
 
 ## 离线经济回归
 
@@ -26,13 +28,13 @@
 
 ## 构建与复验
 
-使用 [P1 构建参数](pvp-p1-a307.md) 将输出改到 A309，并加 `--version 309`。对签名包中对应的 ARM32 库运行以下回归。
+使用 [P1 构建参数](pvp-p1-a307.md) 将输出改到 A310，并加 `--version 310`。对签名包中对应的 ARM32 库运行以下回归。
 
 ```powershell
-python scripts/check_aster_pvp_p2.py D:/Aster-builds/A309
-python scripts/check_aster_p1.py D:/Aster-builds/A309
-python scripts/check_aster_p0_pvp.py D:/Aster-builds/A309
-python scripts/check_aster_pickup_access.py D:/Aster-builds/A309/libSrc.so
+python scripts/check_aster_pvp_p2.py D:/Aster-builds/A310
+python scripts/check_aster_p1.py D:/Aster-builds/A310
+python scripts/check_aster_p0_pvp.py D:/Aster-builds/A310
+python scripts/check_aster_pickup_access.py D:/Aster-builds/A310/libSrc.so
 ```
 
-WSA 验收时，由 WSA USER 打开 PVP 第三区的两家空店，分别进入侦察核对植物。若完成三星夺店，进入「调整防御」挪动一株并保存，重进确认格位。在 WSA 中未完成的步骤以验收结果为准。
+WSA 验收时，由 WSA USER 打开 PVP 第三区的两家空店，分别进入侦察核对地形和植物。若完成三星夺店，进入「调整防御」挪动一株并保存，重进确认地形和格位。在 WSA 中未完成的步骤以验收结果为准。

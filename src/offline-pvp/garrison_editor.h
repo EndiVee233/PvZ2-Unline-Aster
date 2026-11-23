@@ -44,6 +44,9 @@ static bool openLocalDefense(U b,U target){
   log(b,"garrison-roster-restored",target,saved.positions);
  }
 #endif
+ if(target&&!fitBusinessFormation(*businessId(target),saved)){
+  economyNotice(b,"[V82_REPOSITION_ONLY]");return false;
+ }
  // Serialize/read before ending the old editor; bind the new target only
  // after Board::Finish has sent its old module's teardown callback.
  finishArenaBoard(b);
@@ -76,8 +79,16 @@ static bool saveLocalDefense(U b){
   (!target&&at<U>(m,0xa8)!=1)){economyNotice(b,"[V38_PVP_SAVE_ERROR]");return false;}
  Store saved{};bool captured=capture(b,m+0x80,saved);
 #ifdef PVP_GARRISON_REPOSITION
- if(captured&&target&&!validGarrisonMove(saved)){
-  economyNotice(b,"[V82_REPOSITION_ONLY]");log(b,"garrison-roster-change-denied",target,saved.positions);return false;
+ if(captured&&target){
+  bool validMove=validGarrisonMove(saved);
+  const BusinessPlot& plot=*businessId(target);
+  for(U i=0;i<saved.positions&&validMove;++i){
+   const auto& pos=saved.pos[i];
+   validMove=businessLand(plot,pos.row,pos.col);
+  }
+  if(!validMove){
+   economyNotice(b,"[V82_REPOSITION_ONLY]");log(b,"garrison-roster-change-denied",target,saved.positions);return false;
+  }
  }
 #endif
  bool ok=captured&&(target?writeGarrison(b,target,saved):writeStore(b,saved));

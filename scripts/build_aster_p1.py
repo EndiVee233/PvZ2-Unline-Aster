@@ -12,8 +12,10 @@ from keystone import Ks, KS_ARCH_ARM, KS_MODE_ARM
 
 from build_aster_pickup_access import ENGINE
 from build_aster_pvp_feedback import pack_apk
+from build_aster_hud_pickup import ASSET, BOOTSTRAP, PLAN, create_plan, rebuild_dynamic_bootstrap
 from build_aster_save_path_fix import manifest_version
 from prepare_aster_pvp_feedback import NEW_STATE, ROOT, compile_payload, file_offset
+from prepare_aster_shop_terrain import prepare_shop_terrain
 from prepare_profile_memory import branch
 
 
@@ -22,6 +24,7 @@ PVP_NAMES = (
     "offlineGarden", "offlineMapArmyPrepare", "offlineDaveNarrativeAck", "offlineDaveLabel", "offlineAttack", "offlineInfo",
     "offlineBattleResult", "offlineBusinessAction", "offlineBusinessChest", "offlineScoutRewards",
     "offlineAttackPreviewFormat", "offlineAttackPreviewCost", "offlineHistoryLookup",
+    "offlinePresetLevelDefinition", "offlineSave",
     "_ZL21projectBusinessOwnersjPh", "_ZL21projectBusinessStocksjPh",
 )
 
@@ -157,12 +160,18 @@ def build(base, sdk, headers, prior, p0, output, signing, version):
     with ZipFile(base) as apk:
         engine = patch_native(apk.read(ENGINE), sdk, headers, prior, p0, output)
         manifest = manifest_version(apk.read("AndroidManifest.xml"), version, 305, prefix="A")
+        original = apk.read(ASSET)
+        shop_terrain = prepare_shop_terrain(original)
+        bootstrap = rebuild_dynamic_bootstrap(apk.read(BOOTSTRAP), output / "bootstrap", original, shop_terrain)
+    plan = create_plan(shop_terrain, output, rgba_atlases=1)
+    (output / "dynamic.rsb.smf").write_bytes(shop_terrain)
     (output / "libSrc.so").write_bytes(engine)
     (output / "generated").mkdir(exist_ok=True)
     copyfile(headers / "exchange-presets.json", output / "generated/exchange-presets.json")
     if signing:
         final = output / f"PvZ2-Unline-Aster-A{version}-ARM32-WSA-existing-data.apk"
-        pack_apk(base, {ENGINE: engine, "AndroidManifest.xml": manifest}, sdk, final, signing)
+        pack_apk(base, {ENGINE: engine, "AndroidManifest.xml": manifest, ASSET: shop_terrain,
+                        BOOTSTRAP: bootstrap, PLAN: plan}, sdk, final, signing)
         print(final)
 
 
@@ -171,5 +180,5 @@ if __name__ == "__main__":
     for name in ("base", "sdk", "headers", "prior", "p0", "output"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--signing", type=Path)
-    parser.add_argument("--version", type=int, default=308)
+    parser.add_argument("--version", type=int, default=310)
     build(**vars(parser.parse_args()))

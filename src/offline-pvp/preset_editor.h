@@ -76,15 +76,38 @@ static P editorApp(U b){return at<P>(at<P>(reinterpret_cast<P>(b),0x1821674),0);
 static P editorBoard(U b){P a=editorApp(b);return a?at<P>(a,0x6bc):nullptr;}
 static bool editorLevel(P board){return board&&sameText(at<P>(board,0xc4),PRESET_BOARD_NAME);}
 #ifdef PVP_PRESET_STOCK_BOARD
+#ifdef PVP_BUSINESS_DEFENSE
+static bool shopDefenseSession(U b,U id);
+#endif
 extern "C" P offlinePresetLevelDefinition(U b,P out,P registry,P name){
- if(!presetEditing||!sameText(at<P>(name,0),PRESET_BOARD_NAME))
-  return call<P>(b,0x440dc4,out,registry,name);
- // Keep the stock board identity for lifecycle, UI and input. Swap only the data read.
+ P level=at<P>(name,0);
+ const char* alias=nullptr;
+ bool preset=presetEditing&&sameText(level,PRESET_BOARD_NAME);
+ if(preset)alias="arena_preset_editor";
+#ifdef PVP_BUSINESS_DEFENSE
+ if(!preset&&regular(b)){
+  P m=manager(b);
+  if(at<U>(m,0xa8)==2){
+   U id=at<U>(m,0xf4);
+   const BusinessPlot* shop=businessId(id);
+   if(shop){
+    bool battle=arenaUser==owner(b)&&arenaNpc==id&&sameText(level,"arena_battle_test");
+    bool defense=sameText(level,PRESET_BOARD_NAME)&&shopDefenseSession(b,id);
+    if(battle)alias=shop->kind==BusinessKind::HotDog?"arena_shop_pirate_battle":"arena_shop_west_battle";
+    if(defense)alias=shop->kind==BusinessKind::HotDog?"arena_shop_pirate_defense":"arena_shop_west_defense";
+   }
+  }
+ }
+#endif
+ if(!alias)return call<P>(b,0x440dc4,out,registry,name);
+ // Changing only the definition keeps the stock board identity for the Arena.
  P dataName=nullptr;
- narrow(b,reinterpret_cast<P>(&dataName),"arena_preset_editor");
+ narrow(b,reinterpret_cast<P>(&dataName),alias);
  P result=call<P>(b,0x440dc4,out,registry,&dataName);
  release(b,dataName);
- log(b,"preset-definition-loaded");
+ if(preset)log(b,"preset-definition-loaded");
+ else if(!call<P>(b,0x1da034,call<P>(b,0x11d74b4),out))
+  return call<P>(b,0x440dc4,out,registry,name);
  return result;
 }
 #ifdef PVP_PRESET_EDIT_TOOLS

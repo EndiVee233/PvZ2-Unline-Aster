@@ -445,6 +445,31 @@ static void apply(U b,P d,const Store&s){
  at<U>(d,28)=1;
 }
 #ifdef PVP_BUSINESS_SCOUT
+static bool fitBusinessFormation(const BusinessPlot& plot,Store& formation){
+ if(plot.kind!=BusinessKind::HotDog)return true;
+ bool occupied[5][9]{};
+ for(U i=0;i<formation.positions;++i){
+  const auto& pos=formation.pos[i];
+  if(businessLand(plot,pos.row,pos.col))occupied[pos.row][pos.col]=true;
+ }
+ for(U i=0;i<formation.positions;++i){
+  auto& pos=formation.pos[i];
+  if(businessLand(plot,pos.row,pos.col))continue;
+  // Old rectangular-board saves can contain plants over the new water lanes.
+  // Keep valid slots and the roster, preferring an open tile in the same row.
+  U best=~0u,bestRow=0,bestCol=0;
+  for(U row=0;row<5;++row)for(U col=0;col<9;++col){
+   if(occupied[row][col]||!businessLand(plot,row,col))continue;
+   U distance=(row==pos.row?0:9)+(row>pos.row?row-pos.row:pos.row-row)
+              +(col>pos.col?col-pos.col:pos.col-col);
+   if(distance<best){best=distance;bestRow=row;bestCol=col;}
+  }
+  if(best==~0u)return false;
+  occupied[bestRow][bestCol]=true;
+  pos.row=bestRow;pos.col=bestCol;
+ }
+ return true;
+}
 static void initialBusinessFormation(U b,const BusinessPlot&s,Store&formation){
  // Native PlantType IDs. The plant choices come from the old shop footage;
  // these coordinates are Aster's layouts on its existing arena.
@@ -857,6 +882,7 @@ static bool scoutBusiness(U b,const BusinessPlot&s,bool attack){
 #ifdef PVP_SILENT_RAIDS
  I saved=readGarrison(b,s.id,formation);if(saved<0)return false;
 #endif
+ if(!fitBusinessFormation(s,formation))return false;
  apply(b,m+0x80,formation);arenaNpc=s.id;arenaUser=owner(b);
  loadArena(b,m,s.rules.terrain,0);log(b,"business-scout",s.id,formation.positions);return true;
 }
@@ -964,6 +990,13 @@ extern "C" void offlineSave(U b,P network,P json,U zone,U type){
 #endif
   scene(b,25);}else log(b,"defense-save-failed");
 }
+#if defined(PVP_PRESET_STOCK_BOARD) && defined(PVP_BUSINESS_DEFENSE)
+// Keep the target's first reference in the existing defense code for the
+// shared runtime layout used by the installed native hooks.
+static __attribute__((noinline)) bool shopDefenseSession(U b,U id){
+ return defenseSessionActive&&defenseSessionUser==owner(b)&&defenseSessionTarget==id;
+}
+#endif
 extern "C" void offlineInfo(U b,P m,U a,U id,U kind){
 #ifdef PVP_SILENT_RAIDS
  clearRevenge();

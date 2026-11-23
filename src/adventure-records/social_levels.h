@@ -1,4 +1,5 @@
 #pragma once
+#include "star_advance.h"
 
 namespace {
 constexpr char dialogFile[] = "/data/data/com.pvz2unline.aster/cache/aster-social-level";
@@ -32,16 +33,10 @@ static SocialSession social;
 static Record viewRecord;
 static Word sequence;
 
-struct ChallengeChoice {
-    Word owner, day, stars, expires;
-    bool applied;
-};
 static ChallengeChoice selectedChallenge;
 
 static Word wallTime(Word base) {
-    Word time[2];
-    return native<int>(base, 0x147974, time, nullptr) == 0
-        ? time[0] * 100U + time[1] / 10000U : 0;
+    return starAdvanceTime(base);
 }
 
 static bool publish(Word base, Word kind) {
@@ -413,6 +408,12 @@ static int challengeDialogStars(Word base, Word count, Word index, Word mode) {
     Object store = ownerStore(base);
     Object profile = store ? native<Object>(base, 0x7a98dc, store) : nullptr;
     return profile ? int(earnedStars(base, profile, alias, count)) : -1;
+}
+
+extern "C" int asterAdventureNextStar(Word base, Object object, Word apply) {
+    return advanceAdventureStar(base, apply ? currentStarResult(object) : object, gameBoard(base),
+                                owner(ownerStore(base)), selectedChallenge, apply,
+                                challengeDialogStars, AdventureRecords::levelId, wallTime);
 }
 
 extern "C" bool asterAdventureAllStarsTitle(Word base, Object page) {

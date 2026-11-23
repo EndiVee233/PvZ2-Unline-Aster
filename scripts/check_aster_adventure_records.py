@@ -10,7 +10,7 @@ from unicorn import Uc, UC_ARCH_ARM, UC_HOOK_CODE, UC_MODE_ARM
 from unicorn.arm_const import (
     UC_ARM_REG_C1_C0_2, UC_ARM_REG_CPSR, UC_ARM_REG_FPEXC, UC_ARM_REG_LR, UC_ARM_REG_PC,
     UC_ARM_REG_R0, UC_ARM_REG_R1, UC_ARM_REG_R2, UC_ARM_REG_R3, UC_ARM_REG_R6,
-    UC_ARM_REG_R7, UC_ARM_REG_R8, UC_ARM_REG_SP,
+    UC_ARM_REG_R7, UC_ARM_REG_R8, UC_ARM_REG_R9, UC_ARM_REG_SP,
 )
 
 from build_aster_adventure_records import (
@@ -22,6 +22,7 @@ from build_aster_adventure_records import (
     SET_PHASE, STAR_DESCRIPTIONS_ENABLED, STAR_DESCRIPTIONS_GATE,
     STAR_MODULE_ENABLED, STAR_MODULE_GATE, STAR_MODULE_LOCKED,
     STAR_RESULT_TITLE, STAR_RIBBON_ART, STAR_RIBBON_EMPTY, STAR_RIBBON_GOLD,
+    STAR_NEXT_BUTTON, STAR_NEXT_CLICK, STAR_SHOW_CONTINUE, STAR_SHOW_NEXT, STAR_CLICK_CONTINUE,
     SHOP_SCROLLBAR_CALL, SHOP_SCROLLBAR_VISIBLE, START_BUTTON_EVENT, START_CALL,
     SEED_BANK_REFRESH, SEED_PACKET_DRAW_CALL, SEED_PACKET_DRAW,
     STOCK_SUN_CLOSE, STOCK_SUN_PURCHASE, SUN_BUTTON_OPEN, UPDATE, VIEWPORT_HIGH_DRAW, WIN, WIN_CALL,
@@ -57,11 +58,11 @@ SELF_ROW = 0x100 + 160
 
 
 class Game:
-    def __init__(self, output, social_enabled=True):
+    def __init__(self, output, social_enabled=True, engine=None):
         self.arm = Uc(UC_ARCH_ARM, UC_MODE_ARM)
         self.arm.mem_map(BASE, 0x2000000)
         self.arm.mem_map(DATA, 0x10000)
-        with (output / "libSrc-adventure-records.so").open("rb") as f:
+        with (engine or output / "libSrc-adventure-records.so").open("rb") as f:
             for seg in ELFFile(f).iter_segments():
                 if seg["p_type"] == "PT_LOAD" and seg["p_filesz"]:
                     self.arm.mem_write(BASE + seg["p_vaddr"], seg.data())
@@ -450,8 +451,8 @@ SUNFLOWER = DATA + 0x5c00
 
 
 class SocialGame(Game):
-    def __init__(self, output, social_enabled=True):
-        super().__init__(output, social_enabled=social_enabled)
+    def __init__(self, output, social_enabled=True, engine=None):
+        super().__init__(output, social_enabled=social_enabled, engine=engine)
         self.put(SCENE + 0x984, 13)
         self.put(BASE + 0x183049c, PLANT_STORE)
         self.put(STAGE, STAGE_TEXT)
@@ -1046,6 +1047,44 @@ def check_star_dialogs(output):
     assert ribbon(1) == STAR_RIBBON_ART + 4 and all_stars_title(2)
     print("Star dialog checks passed: out-of-order ribbons, completion titles and stock fallback")
 
+def check_star_advance(output, engine=None):
+    for index, earned, mode, next_index in (
+            (0, 0, 1, 1), (0, 0b001, 1, 1), (0, 0b011, 1, 2),
+            (2, 0b101, 1, 1), (1, 0b110, 2, 0), (2, 0b011, 1, -1),
+            (1, 0b101, 1, -1), (0, 0, 0, -2), (0, 0, 3, -2)):
+        game = SocialGame(output, engine=engine)
+        game.choose(b"egypt2")
+        game.update_menu()
+        game.click(17 + index)
+        game.click(2)
+        game.put(SCENE + 0x984, 6)
+        assert game.execute("asterAdventureSelectChallenge", BASE, BOARD, PROPERTIES)
+        game.earned = earned
+        page = DIALOG + 0x240
+        game.put(page, 4)
+        game.put(page + 0x44, 3, index, mode)
+        game.put(DIALOG + 0xe0, page, page + 0x88, page + 0x88, 0)
+
+        def branch_target(site, targets, **registers):
+            hooks = [game.arm.hook_add(UC_HOOK_CODE, game.stop, begin=BASE + addr,
+                                       end=BASE + addr) for addr in targets]
+            try:
+                game.execute(site, **registers)
+                return game.arm.reg_read(UC_ARM_REG_PC) - BASE
+            finally:
+                for hook in hooks:
+                    game.arm.hook_del(hook)
+
+        game.arm.reg_write(UC_ARM_REG_R9, page)
+        draw = branch_target(STAR_NEXT_BUTTON, (STAR_NEXT_BUTTON + 4, STAR_SHOW_CONTINUE, STAR_SHOW_NEXT))
+        assert draw == { -2: STAR_NEXT_BUTTON + 4, -1: STAR_SHOW_CONTINUE }.get(next_index, STAR_SHOW_NEXT)
+        click = branch_target(STAR_NEXT_CLICK, (STAR_NEXT_CLICK + 4, STAR_CLICK_CONTINUE), r5=DIALOG)
+        assert click == (STAR_CLICK_CONTINUE if next_index == -1 else STAR_NEXT_CLICK + 4)
+        assert game.execute("asterAdventureSelectChallenge", BASE, BOARD, PROPERTIES)
+        assert game.get(BOARD + 0x7f0) == (next_index if next_index >= 0 else index,)
+        assert game.earned == earned
+    print("Next star checks passed: first missing, skip earned, wrap, all earned, retry and intro")
+
 
 def check_campaign_levels(output):
     catalog = json.loads((output / "adventure-levels.json").read_bytes())
@@ -1393,13 +1432,19 @@ if __name__ == "__main__":
     parser.add_argument("output", type=Path)
     parser.add_argument("--battle-tools", action="store_true")
     parser.add_argument("--social-levels", action="store_true")
+    parser.add_argument("--star-advance-engine", type=Path)
     args = parser.parse_args()
+    if args.star_advance_engine:
+        check_star_advance(args.output, args.star_advance_engine)
+        raise SystemExit(0)
     main(args.output)
     check_egypt_endless_plant_updates(args.output)
     if args.social_levels:
         check_social_levels(args.output)
         check_world_trophy(args.output)
         check_star_dialogs(args.output)
+        if "asterAdventureNextStar" in Game(args.output).symbols:
+            check_star_advance(args.output)
         check_campaign_levels(args.output)
         check_social_settings(args.output)
         check_friend_sun(args.output)

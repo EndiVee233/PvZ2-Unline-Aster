@@ -11,6 +11,9 @@ static bool practiceHousePanel(U b,P panel);
 #endif
 // Starting balance for the native first-attack tutorial's completion.
 static constexpr U FIRST_ATTACK_COINS=1000;
+#ifdef ASTER_SOCIAL_CHALLENGE_CHOICE
+#include "../adventure-records/star_advance_overlay.h"
+#endif
 #ifdef BOARD_CAMERA_BOUNDS
 #include "board_camera.h"
 #endif

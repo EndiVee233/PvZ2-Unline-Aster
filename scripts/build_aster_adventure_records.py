@@ -38,6 +38,8 @@ STAR_MODULE_GATE, STAR_MODULE_LOCKED, STAR_MODULE_ENABLED = 0x90221C, 0x902348, 
 STAR_DESCRIPTIONS_GATE, STAR_DESCRIPTIONS_ENABLED = 0x7B1EB8, 0x7B1EC8
 STAR_RESULT_TITLE = 0x7E5568
 STAR_RIBBON_ART, STAR_RIBBON_EMPTY, STAR_RIBBON_GOLD = 0x805DB0, 0x805FB0, 0x805FF8
+STAR_NEXT_BUTTON, STAR_NEXT_CLICK = 0x7E5CFC, 0x7E6BC8
+STAR_SHOW_NEXT, STAR_SHOW_CONTINUE, STAR_CLICK_CONTINUE = 0x7E5D30, 0x7E62CC, 0x7E6B68
 LEVEL_MENU_DRAW, POP_GRAPHICS = 0x7F3934, 0x116D764
 LEVEL_MENU_PANEL_CALL, DRAW_DIALOG_PANEL = 0x7F3B38, 0x7F3470
 BEGIN_BATTLE_ENTRY, BEGIN_BATTLE_TARGET = 0x2261A8, 0x17813A4
@@ -74,6 +76,29 @@ FLAGS = [
     "-fno-stack-protector", "-fno-exceptions", "-fno-rtti",
     "-fno-unwind-tables", "-fno-asynchronous-unwind-tables",
 ]
+
+def star_advance_patches(stub, helper):
+    button = stub(f"""push {{r0-r3,ip,lr}}
+        mov r2,#0
+        {helper("asterAdventureNextStar", "sb")}
+        cmn r0,#1
+        pop {{r0-r3,ip,lr}}
+        beq #{STAR_SHOW_CONTINUE}
+        movgt r4,#0
+        bgt #{STAR_SHOW_NEXT}
+        ldr r2,[sb,#0x48]
+        b #{STAR_NEXT_BUTTON + 4}
+    """)
+    click = stub(f"""push {{r0-r3,ip,lr}}
+        mov r2,#1
+        {helper("asterAdventureNextStar", "r5")}
+        cmn r0,#1
+        pop {{r0-r3,ip,lr}}
+        beq #{STAR_CLICK_CONTINUE}
+        mov r3,#1
+        b #{STAR_NEXT_CLICK + 4}
+    """)
+    return ((STAR_NEXT_BUTTON, 0xE5992048, button), (STAR_NEXT_CLICK, 0xE3A03001, click))
 
 
 def payload(ndk, output, address, state_address, battle_tools, social_levels, social_art):
@@ -498,6 +523,8 @@ def patch_native(native, ndk, output, battle_tools=False, social_levels=False, s
         """)
         for site in MAP_LEVEL_CALLS:
             changes.append((site, branch(site, LAUNCH_LEVEL, True), branch(site, choose, True)))
+        for site, original, target in star_advance_patches(stub, helper):
+            changes.append((site, struct.pack("<I", original), branch(site, target)))
         for site in BOARD_TOUCH_CALLS:
             changes.append((site, branch(site, BOARD_TOUCH, True),
                             branch(site, symbols["asterAdventureViewTouch"], True)))

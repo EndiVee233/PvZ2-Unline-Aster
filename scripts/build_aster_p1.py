@@ -11,6 +11,7 @@ from elftools.elf.elffile import ELFFile
 from keystone import Ks, KS_ARCH_ARM, KS_MODE_ARM
 
 from build_aster_pickup_access import ENGINE
+from build_aster_adventure_records import star_advance_patches
 from build_aster_pvp_feedback import pack_apk
 from build_aster_hud_pickup import ASSET, BOOTSTRAP, PLAN, create_plan, rebuild_dynamic_bootstrap
 from build_aster_save_path_fix import manifest_version
@@ -27,7 +28,30 @@ def symbols(elf):
     return {s.name: s for s in elf.get_section_by_name(".symtab").iter_symbols() if s.name}
 
 
-def patch_native(native, sdk, headers, prior, p0, output):
+def social_star_flags(native, elf, social_payload):
+    with social_payload.open("rb") as handle:
+        social = ELFFile(handle)
+        indexed = symbols(social)
+        challenge = [indexed[f"_ZN12_GLOBAL__N_117selectedChallengeE.{i}"]["st_value"]
+                     for i in range(5)]
+        if challenge != list(range(challenge[0], challenge[0] + 20, 4)):
+            raise ValueError("Installed social star selection ABI changed")
+        code = social.get_section_by_name(".payload")
+        flags = [f"-DASTER_SOCIAL_CHALLENGE_CHOICE={challenge[0]:#x}"]
+        for macro, symbol in (("ASTER_SOCIAL_STAR_MASK", "_ZL20challengeDialogStarsjjjj"),
+                              ("ASTER_SOCIAL_LEVEL_ID", "_ZN16AdventureRecords7levelIdEPKc"),
+                              (None, "asterAdventureSelectChallenge")):
+            entry = indexed[symbol]
+            address, size = entry["st_value"], entry["st_size"]
+            offset, relative = file_offset(elf, address), address - code["sh_addr"]
+            if not size or native[offset:offset + size] != code.data()[relative:relative + size]:
+                raise ValueError(f"Installed social payload differs at {symbol}")
+            if macro:
+                flags.append(f"-D{macro}={address:#x}")
+        return tuple(flags)
+
+
+def patch_native(native, sdk, headers, prior, p0, output, social_payload=None):
     if sha256(native).hexdigest() != A305:
         raise ValueError("Expected the signed A305 ARM32 guest")
     elf = ELFFile(BytesIO(native))
@@ -39,6 +63,8 @@ def patch_native(native, sdk, headers, prior, p0, output):
     alignment = rw["p_align"]
     runtime_address = (rw["p_vaddr"] + rw["p_memsz"] + alignment - 1) & -alignment
     flags = ("-DPVP_DISTRICT_SHOPS", "-DPVP_PRACTICE_HOUSE")
+    if social_payload:
+        flags += social_star_flags(native, elf, social_payload)
     patched_elf = compile_payload(sdk, ROOT / "src", headers, output, start, runtime_address,
                                   archived=False, extra_flags=flags)
     guest = ELFFile(BytesIO(patched_elf.read_bytes()))
@@ -83,6 +109,15 @@ def patch_native(native, sdk, headers, prior, p0, output):
         return origin
 
     base = "adr r0,anchor\nldr ip,[r0]\nsub r0,r0,ip"
+    if social_payload:
+        def social_stub(source):
+            return stub(source, base=True)
+
+        def social_helper(name, widget):
+            return f"mov r1,{widget}\n{base}\nbl #{address(name)}"
+
+        for site, original, target in star_advance_patches(social_stub, social_helper):
+            redirect(site, target, original)
     redirect(0x100cf10, stub(f"""
         push {{r0-r4,lr}}
         mov r1,r4
@@ -160,10 +195,10 @@ def patch_native(native, sdk, headers, prior, p0, output):
     return result
 
 
-def build(base, sdk, headers, prior, p0, output, signing, version):
+def build(base, sdk, headers, prior, p0, output, signing, version, social_payload=None):
     output.mkdir(parents=True, exist_ok=True)
     with ZipFile(base) as apk:
-        engine = patch_native(apk.read(ENGINE), sdk, headers, prior, p0, output)
+        engine = patch_native(apk.read(ENGINE), sdk, headers, prior, p0, output, social_payload)
         manifest = manifest_version(apk.read("AndroidManifest.xml"), version, 305, prefix="A")
         original = apk.read(ASSET)
         shop_terrain = prepare_shop_terrain(original)
@@ -185,5 +220,6 @@ if __name__ == "__main__":
     for name in ("base", "sdk", "headers", "prior", "p0", "output"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--signing", type=Path)
+    parser.add_argument("--social-payload", type=Path, help="Installed A302 adventure-records.elf")
     parser.add_argument("--version", type=int, default=310)
     build(**vars(parser.parse_args()))

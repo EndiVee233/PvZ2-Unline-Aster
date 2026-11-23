@@ -35,7 +35,8 @@ final class AdventureFriendRoster {
         Map<Integer, JSONObject> entries = new LinkedHashMap<>();
         for (int i = 0; i < source.length(); i++) {
             JSONObject player = source.optJSONObject(i);
-            if (player == null || player.optInt("id") <= 0) continue;
+            // GitHub UUID-derived IDs occupy this range. Drop legacy demo rows.
+            if (player == null || player.optInt("id") < 0x40000000) continue;
             try {
                 String name = PvpPresetDocument.validName(player.optString("name"));
                 if (!name.isEmpty()) entries.putIfAbsent(player.optInt("id"), player);

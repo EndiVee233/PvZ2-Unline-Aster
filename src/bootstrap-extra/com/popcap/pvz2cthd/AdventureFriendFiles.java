@@ -37,6 +37,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import javax.net.ssl.HttpsURLConnection;
 
@@ -49,6 +50,7 @@ final class AdventureFriendFiles {
     private static final int MAX_CATALOG_BYTES = 24 * 1024 * 1024;
     static final int MAX_RUNS = 1280;
     private static final long REFRESH_INTERVAL = 10 * 60 * 1000L;
+    private static final long RETRY_INTERVAL = 30 * 1000L;
     private static final String FORMAT = "pvz2-aster-player";
     private static final String REPOSITORY = "EndiVee233/PvZ2-Unline-Aster";
     private static final String DIRECTORY = "adventure-friends";
@@ -57,12 +59,14 @@ final class AdventureFriendFiles {
     private static final String RAW = "https://raw.githubusercontent.com/" + REPOSITORY
             + "/main/" + DIRECTORY + "/";
     private static final String UUID_PATTERN = "[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}";
-    private static final Pattern PLAYER_FILE = Pattern.compile("player-" + UUID_PATTERN + "\\.json");
+    private static final Pattern PLAYER_FILE =
+            Pattern.compile("player-(" + UUID_PATTERN + ")(?: ?\\([1-9][0-9]{0,5}\\))?\\.json");
     private static final ExecutorService EXPORTS = Executors.newSingleThreadExecutor();
     private static final ExecutorService SYNC = Executors.newSingleThreadExecutor();
     private static volatile JSONArray community = new JSONArray();
+    private static volatile boolean catalogAvailable;
     private static boolean loaded, exporting;
-    private static long nextRefresh;
+    private static volatile long nextRefresh;
     private static Export pendingExport;
 
     private AdventureFriendFiles() {}
@@ -292,47 +296,56 @@ final class AdventureFriendFiles {
         if (!activity.isFinishing() && !activity.isDestroyed()) Toast.makeText(activity, text, Toast.LENGTH_LONG).show();
     }
 
-    static JSONArray merge(Activity activity, int owner, JSONArray offline) throws JSONException {
-        JSONArray merged = new JSONArray();
+    static JSONArray candidates(Activity activity, int owner) throws JSONException {
+        JSONArray result = new JSONArray();
         Set<Integer> ids = new HashSet<>();
         String ownId = identity(activity, owner);
-        for (int i = 0; i < offline.length(); i++) {
-            JSONObject player = offline.getJSONObject(i);
-            if ((!player.has("playerId") || !ownId.equals(player.optString("playerId")))
-                    && ids.add(player.getInt("id"))) merged.put(player);
-        }
         JSONArray snapshot = community;
-        for (int i = 0; i < snapshot.length() && merged.length() < MAX_FRIENDS; i++) {
+        for (int i = 0; i < snapshot.length() && result.length() < MAX_FRIENDS; i++) {
             JSONObject player = snapshot.getJSONObject(i);
-            if (!ownId.equals(player.getString("playerId")) && ids.add(player.getInt("id"))) merged.put(player);
+            if (!ownId.equals(player.getString("playerId")) && ids.add(player.getInt("id"))) result.put(player);
         }
-        return merged;
+        return result;
+    }
+
+    static boolean catalogAvailable() {
+        return catalogAvailable;
     }
 
     static void refresh(Activity activity, JSONObject levels) {
+        refresh(activity, levels, null);
+    }
+
+    static void refresh(Activity activity, JSONObject levels, Runnable onReady) {
         long now = SystemClock.elapsedRealtime();
-        if (now < nextRefresh) return;
-        nextRefresh = now + REFRESH_INTERVAL;
-        AtomicFile cache = cache(activity);
-        SYNC.execute(() -> {
-            loadCache(cache);
-            try {
-                JSONArray updated = download(levels, community);
-                byte[] data = updated.toString().getBytes(StandardCharsets.UTF_8);
-                if (data.length > MAX_CATALOG_BYTES) throw new IOException("Community catalog exceeds its byte limit");
-                FileOutputStream out = cache.startWrite();
+        if (now >= nextRefresh) {
+            nextRefresh = now + REFRESH_INTERVAL;
+            AtomicFile cache = cache(activity);
+            SYNC.execute(() -> {
+                loadCache(cache);
                 try {
-                    out.write(data);
-                    cache.finishWrite(out);
-                } catch (IOException error) {
-                    cache.failWrite(out);
-                    throw error;
+                    JSONArray updated = download(levels, community);
+                    byte[] data = updated.toString().getBytes(StandardCharsets.UTF_8);
+                    if (data.length > MAX_CATALOG_BYTES)
+                        throw new IOException("Community catalog exceeds its byte limit");
+                    FileOutputStream out = cache.startWrite();
+                    try {
+                        out.write(data);
+                        cache.finishWrite(out);
+                    } catch (IOException error) {
+                        cache.failWrite(out);
+                        throw error;
+                    }
+                    community = updated;
+                    catalogAvailable = true;
+                    Log.i("AsterSocial", "Synced " + updated.length() + " GitHub player profiles");
+                } catch (IOException | JSONException | RuntimeException error) {
+                    if (!catalogAvailable) nextRefresh = SystemClock.elapsedRealtime() + RETRY_INTERVAL;
+                    Log.w("AsterSocial", "Kept the previous GitHub friend list: " + error);
                 }
-                community = updated;
-            } catch (IOException | JSONException | RuntimeException error) {
-                Log.i("AsterSocial", "Kept the previous GitHub friend list", error);
-            }
-        });
+            });
+        }
+        if (onReady != null) SYNC.execute(() -> activity.runOnUiThread(onReady));
     }
 
     static void prepare(Activity activity) {
@@ -349,8 +362,9 @@ final class AdventureFriendFiles {
         loaded = true;
         try (FileInputStream in = cache.openRead()) {
             community = (JSONArray) json(read(in, MAX_CATALOG_BYTES));
+            catalogAvailable = community.length() > 0;
         } catch (IOException | JSONException | ClassCastException ignored) {
-            // The bundled friends are available before the first sync.
+            // An empty catalog is valid before the first download.
         }
     }
 
@@ -364,18 +378,21 @@ final class AdventureFriendFiles {
             old.put(player.getString("playerId"), player);
         }
         JSONArray updated = new JSONArray();
+        Set<String> included = new HashSet<>();
         int size = 2;
         for (int i = 0; i < listing.length() && updated.length() < MAX_FRIENDS; ++i) {
             JSONObject row = listing.getJSONObject(i);
             String name = row.optString("name");
             String sha = row.optString("sha");
             int bytes = row.optInt("size", -1);
-            if (!"file".equals(row.optString("type")) || !PLAYER_FILE.matcher(name).matches()
+            Matcher filename = PLAYER_FILE.matcher(name);
+            if (!"file".equals(row.optString("type")) || !filename.matches()
                     || !sha.matches("[0-9a-f]{40}") || bytes < 1 || bytes > MAX_EXPORT_BYTES) continue;
-            String id = name.substring(7, name.length() - 5);
+            String id = filename.group(1);
+            if (included.contains(id)) continue;
             JSONObject player = old.get(id);
             if (player == null || !sha.equals(player.optString("blob"))) {
-                byte[] data = fetch(RAW + name, MAX_EXPORT_BYTES);
+                byte[] data = fetch(RAW + name.replace(" ", "%20"), MAX_EXPORT_BYTES);
                 if (data.length != bytes || !sha.equals(blobSha(data))) throw new IOException("GitHub file changed during sync");
                 try {
                     player = parsePlayer(data, id, levels).put("blob", sha);
@@ -386,6 +403,7 @@ final class AdventureFriendFiles {
             }
             if (size + bytes + 128 > MAX_CATALOG_BYTES) continue;
             size += bytes + 128;
+            included.add(id);
             updated.put(player);
         }
         return updated;

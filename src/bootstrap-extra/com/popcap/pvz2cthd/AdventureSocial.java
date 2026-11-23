@@ -30,6 +30,7 @@ import java.util.Set;
 public final class AdventureSocial {
     private static final String EVENT = "aster-social-level";
     private static final String REPLY = "aster-social-reply";
+    private static final String ROSTER_REPLY = "aster-social-roster-reply";
     private static final int SELECT = 1, CLOSED = 3, UNAVAILABLE = 4;
     private static final int WATCH = 2, BACK = 3, SCORES = 4;
     private static final int SUN_FRIENDS = 5;
@@ -44,6 +45,7 @@ public final class AdventureSocial {
     private static Message activeMenu;
     private static List<FriendRun> menuRuns;
     private static Message activeView;
+    private static Message activeRoster;
     private static JSONObject levels;
 
     private AdventureSocial() {}
@@ -136,16 +138,11 @@ public final class AdventureSocial {
             JSONObject catalog = catalog(activity);
             if (catalog != null) AdventureFriendFiles.refresh(activity, catalog);
         } else if (message.kind >= FRIEND_LIST && message.kind <= FRIEND_REMOVE) {
-            JSONArray candidates = readFriendCatalog(activity, message.owner, players -> players);
-            try {
-                byte[] page = AdventureFriendRoster.respond(activity, message.owner, message.kind,
-                        message.day, candidates == null ? new JSONArray() : candidates);
-                reply(activity, message, FRIEND_LIST, page);
-            } catch (IOException | JSONException error) {
-                android.util.Log.w("AsterSocial", "Could not read friend roster", error);
-                reply(activity, message, FRIEND_LIST,
-                        ByteBuffer.allocate(20).order(ByteOrder.LITTLE_ENDIAN).putInt(3).array());
-            }
+            activeRoster = message;
+            JSONObject levels = catalog(activity);
+            if (message.kind == FRIEND_CATALOG && levels != null)
+                AdventureFriendFiles.refresh(activity, levels, () -> sendRoster(activity, message));
+            else sendRoster(activity, message);
         } else if (message.kind == SELECT) {
             activeMenu = message;
             menuRuns = friends(activity, message);
@@ -174,6 +171,22 @@ public final class AdventureSocial {
         }
     }
 
+    private static void sendRoster(Activity activity, Message message) {
+        if (activity.isFinishing() || activity.isDestroyed() || activeRoster != message) return;
+        try {
+            if (message.kind == FRIEND_CATALOG && !AdventureFriendFiles.catalogAvailable())
+                throw new IOException("GitHub player catalog unavailable");
+            JSONArray candidates = AdventureFriendFiles.candidates(activity, message.owner);
+            byte[] page = AdventureFriendRoster.respond(activity, message.owner, message.kind,
+                    message.day, candidates);
+            reply(activity, message, FRIEND_LIST, page);
+        } catch (IOException | JSONException error) {
+            android.util.Log.w("AsterSocial", "Could not read friend roster", error);
+            reply(activity, message, FRIEND_LIST,
+                    ByteBuffer.allocate(20).order(ByteOrder.LITTLE_ENDIAN).putInt(3).array());
+        }
+    }
+
     private static void sendScores(Activity activity, Message message, List<FriendRun> runs) {
         ByteBuffer rows = ByteBuffer.allocate(4 + runs.size() * 176).order(ByteOrder.LITTLE_ENDIAN);
         rows.putInt(runs.size());
@@ -191,8 +204,9 @@ public final class AdventureSocial {
                 .order(ByteOrder.LITTLE_ENDIAN);
         data.putInt(message.token).putInt(message.owner).putInt(message.day).putInt(action);
         if (record != null) data.put(record);
-        File temp = new File(activity.getCacheDir(), REPLY + ".tmp");
-        File target = new File(activity.getCacheDir(), REPLY);
+        String filename = action == FRIEND_LIST ? ROSTER_REPLY : REPLY;
+        File temp = new File(activity.getCacheDir(), filename + ".tmp");
+        File target = new File(activity.getCacheDir(), filename);
         try {
             try (FileOutputStream output = new FileOutputStream(temp)) {
                 output.write(data.array());
@@ -231,36 +245,15 @@ public final class AdventureSocial {
     }
 
     private static <T> T readAllFriends(Activity activity, int owner, Reader<T> reader) {
-        return readFriendCatalog(activity, owner,
-                players -> reader.read(AdventureFriendRoster.selected(activity, owner, players)));
-    }
-
-    private static <T> T readFriendCatalog(Activity activity, int owner, Reader<T> reader) {
         JSONObject catalog = catalog(activity);
         if (catalog != null) AdventureFriendFiles.refresh(activity, catalog);
-        File external = activity.getExternalFilesDir(null);
-        File local = external == null ? null : new File(external, "adventure-friends.json");
-        if (local != null && local.isFile()) {
-            try (FileInputStream stream = new FileInputStream(local)) {
-                return reader.read(AdventureFriendFiles.merge(activity, owner, players(stream)));
-            } catch (IOException | JSONException error) {
-                android.util.Log.w("AsterSocial", "Invalid offline friends file", error);
-            }
-        }
-        try (InputStream stream = activity.getAssets().open("adventure/friends.json")) {
-            return reader.read(AdventureFriendFiles.merge(activity, owner, players(stream)));
+        try {
+            JSONArray candidates = AdventureFriendFiles.candidates(activity, owner);
+            return reader.read(AdventureFriendRoster.selected(activity, owner, candidates));
         } catch (IOException | JSONException error) {
-            android.util.Log.w("AsterSocial", "Could not read bundled offline friends", error);
+            android.util.Log.w("AsterSocial", "Could not read selected GitHub friends", error);
             return null;
         }
-    }
-
-    private static JSONArray players(InputStream stream) throws IOException, JSONException {
-        JSONObject file = new JSONObject(new String(PvpPresetDocument.read(stream), StandardCharsets.UTF_8));
-        integer(file, "version", 1, 1);
-        JSONArray players = file.getJSONArray("friends");
-        if (players.length() > AdventureFriendFiles.MAX_FRIENDS) throw new IOException("Too many offline friends");
-        return players;
     }
 
     private static byte[] encodeSunFriends(JSONArray players) throws IOException, JSONException {

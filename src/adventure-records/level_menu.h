@@ -3,6 +3,7 @@
 namespace {
 static bool drawBorrowDialogPanel(Word base, Object dialog, Object graphics, const struct MenuRect* bounds);
 static bool friendBookUsesBorrowFrame(Object dialog);
+static void drawFriendBookBackdrop(Word base, Object dialog, Object graphics);
 static void drawBorrowDialogContents(Word base, Object dialog, Object graphics);
 static void drawUserDialog(Word base, Object dialog, Object graphics);
 static bool userDrawsOwnFrame(Object dialog);

@@ -401,10 +401,13 @@ static void refreshBorrowOffers(Word base) {
 }
 
 static bool drawBorrowDialogPanel(Word base, Object dialog, Object graphics, const MenuRect* bounds) {
-    if (dialog != borrow.dialog && !friendBookUsesBorrowFrame(dialog)) return false;
+    const bool friends = friendBookUsesBorrowFrame(dialog);
+    if (dialog != borrow.dialog && !friends) return false;
     const int top = bounds->height * borrowTop / borrowHeight;
+    const int bottom = friends ? 461 : borrowBottom;
     const MenuRect frame{bounds->x, bounds->y + top, bounds->width,
-                         bounds->height * (borrowBottom - borrowTop) / borrowHeight};
+                         bounds->height * (bottom - borrowTop) / borrowHeight};
+    if (friends) drawFriendBookBackdrop(base, dialog, graphics);
     native<void>(base, 0x7f3470, dialog, graphics, &frame);
     return true;
 }

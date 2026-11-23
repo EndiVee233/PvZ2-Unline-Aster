@@ -181,7 +181,7 @@ def check(folder):
     lab.put(lab.state() + 328, lab.now + 90)
     lab.put(lab.state() + 296, 1)
     lab.put(lab.state() + 300, lab.now + 180)
-    assert lab.entry_timer() == f32(190)
+    assert lab.entry_timer() == f32(280)
     card, graphic = lab.alloc(0x200), lab.alloc(4)
     lab.put(manager + 0x6c, 2)
     lab.put(manager + 0x74, f32(440))
@@ -190,6 +190,14 @@ def check(folder):
         lab.stub(0x1072aa0, card, graphic)
         assert lab.timers[-1] == expected
         assert (lab.get(manager + 0x6c), lab.get(manager + 0x74)) == (2, f32(440))
+    lab.put(lab.state() + 196, 2)
+    lab.put(lab.state() + 200, lab.now + 340)
+    assert lab.entry_timer() == f32(440)
+    lab.put(lab.state() + 200, 0)
+    lab.put(lab.state() + 196, 0)
+    lab.put(lab.state() + 328, lab.now + 240)
+    assert lab.entry_timer() == f32(340)
+    lab.put(lab.state() + 328, lab.now + 90)
     lab.now += 90
     assert lab.entry_timer() == f32(190)  # research expired, evolution still has 90 seconds
     lab.now += 90

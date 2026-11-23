@@ -1,4 +1,4 @@
-"""Build A307 with P1 PvP changes on the accepted A305 ARM32 guest."""
+"""Build A308 with P1 PvP changes on the accepted A305 ARM32 guest."""
 import argparse
 from hashlib import sha256
 from io import BytesIO
@@ -156,12 +156,12 @@ def build(base, sdk, headers, prior, p0, output, signing):
     output.mkdir(parents=True, exist_ok=True)
     with ZipFile(base) as apk:
         engine = patch_native(apk.read(ENGINE), sdk, headers, prior, p0, output)
-        manifest = manifest_version(apk.read("AndroidManifest.xml"), 307, 305, prefix="A")
+        manifest = manifest_version(apk.read("AndroidManifest.xml"), 308, 305, prefix="A")
     (output / "libSrc.so").write_bytes(engine)
     (output / "generated").mkdir(exist_ok=True)
     copyfile(headers / "exchange-presets.json", output / "generated/exchange-presets.json")
     if signing:
-        final = output / "PvZ2-Unline-Aster-A307-ARM32-WSA-existing-data.apk"
+        final = output / "PvZ2-Unline-Aster-A308-ARM32-WSA-existing-data.apk"
         pack_apk(base, {ENGINE: engine, "AndroidManifest.xml": manifest}, sdk, final, signing)
         print(final)
 

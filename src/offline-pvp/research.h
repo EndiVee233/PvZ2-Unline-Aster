@@ -41,8 +41,8 @@ static U laboratoryDue(const Economy& state,U category,U now){
  if(category==0||category==state.upgradeKind){
   if(state.upgradeKind&&state.upgradeDue>now)due=state.upgradeDue;
  }
- if((category==0||category==4)&&state.evolutionIndex&&state.evolutionDue>now&&(!due||state.evolutionDue<due))due=state.evolutionDue;
- if((category==0||category==7)&&state.researchIndex&&state.researchDue>now&&(!due||state.researchDue<due))due=state.researchDue;
+ if((category==0||category==4)&&state.evolutionIndex&&state.evolutionDue>now&&state.evolutionDue>due)due=state.evolutionDue;
+ if((category==0||category==7)&&state.researchIndex&&state.researchDue>now&&state.researchDue>due)due=state.researchDue;
  return due;
 }
 static float laboratoryTime(U b,U category){

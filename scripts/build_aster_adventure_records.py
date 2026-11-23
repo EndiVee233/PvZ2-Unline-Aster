@@ -51,6 +51,7 @@ BOARD_MESSAGE_DRAW, BOARD_MESSAGE_TARGET = 0x46D890, 0x1A30074
 VIEWPORT_NORMAL_DRAW = 0x1A64638
 VIEWPORT_HIGH_DRAW = 0x1A64434
 SEED_BANK_REFRESH = 0x895BD8
+CHOOSER_RESTORE_CALL, CHOOSER_RESTORE = 0x8A5FEC, 0x8A0308
 SEED_PACKET_DRAW_CALL, SEED_PACKET_DRAW = 0x8AE434, 0x8AB53C
 GOLD_TILE_SUN = 0x3C1834
 PLAY_NARRATIVE = 0x2AF780
@@ -326,6 +327,11 @@ def patch_native(native, ndk, output, battle_tools=False, social_levels=False, s
             .word 0xe92d4818
             b #{SEED_BANK_REFRESH + 4}
         """)
+        chooser_restore = stub(f"""push {{r4,lr}}
+            mov r2,r1
+            {helper("asterAdventureRestoreChooserCards", "r0")}
+            pop {{r4,pc}}
+        """)
         seed_draw = stub(f"""push {{r4,lr}}
             mov r3,r2
             mov r2,r1
@@ -334,6 +340,8 @@ def patch_native(native, ndk, output, battle_tools=False, social_levels=False, s
         """)
         changes.extend((
             (SEED_BANK_REFRESH, struct.pack("<I", 0xe92d4818), branch(SEED_BANK_REFRESH, refresh)),
+            (CHOOSER_RESTORE_CALL, branch(CHOOSER_RESTORE_CALL, CHOOSER_RESTORE, True),
+             branch(CHOOSER_RESTORE_CALL, chooser_restore, True)),
             (SEED_PACKET_DRAW_CALL, branch(SEED_PACKET_DRAW_CALL, SEED_PACKET_DRAW, True),
              branch(SEED_PACKET_DRAW_CALL, seed_draw, True)),
         ))

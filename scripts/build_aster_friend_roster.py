@@ -9,7 +9,9 @@ from zipfile import ZipFile
 from elftools.elf.elffile import ELFFile
 from keystone import Ks, KS_ARCH_ARM, KS_MODE_ARM
 
-from build_aster_adventure_records import patch_friend_entry, payload, social_dex
+from build_aster_adventure_records import (
+    CHOOSER_RESTORE, CHOOSER_RESTORE_CALL, patch_friend_entry, payload, social_dex,
+)
 from build_aster_hud_pickup import ASSET, BOOTSTRAP, PLAN, create_plan, rebuild_dynamic_bootstrap
 from build_aster_pvp_feedback import pack_apk
 from build_aster_save_path_fix import manifest_version
@@ -62,23 +64,27 @@ def patch_guest(engine, ndk, output, old_social, star_overlay):
 
     # Replace only the sign-in background draw. The original widget still
     # owns its pressed state, hit testing, and the reward notification badge.
-    code.extend(bytes(-len(code) % 4))
-    stub = code_address + len(code)
-    original = file_offset(source, SIGN_SPRITE_DRAW)
-    if engine[original:original + 4] != branch(SIGN_SPRITE_DRAW, 0x11694C8, link=True):
-        raise ValueError("Unexpected sign-in background draw call")
     assembler = Ks(KS_ARCH_ARM, KS_MODE_ARM)
-    code.extend(assembler.asm(f"""
-        mov r2,r1
-        mov r1,r0
-        ldrb r3,[r5,#0xec]
-        adr r0,basepoint
-        ldr ip,[r0]
-        sub r0,r0,ip
-        b #{entries["asterSignMapDraw"]}
-        basepoint: .word {stub + 28}
-    """, stub)[0])
-    patched[original:original + 4] = branch(SIGN_SPRITE_DRAW, stub, link=True)
+    for site, stock, entry, arguments in (
+        (SIGN_SPRITE_DRAW, 0x11694C8, "asterSignMapDraw", "mov r2,r1\nmov r1,r0\nldrb r3,[r5,#0xec]"),
+        (CHOOSER_RESTORE_CALL, CHOOSER_RESTORE, "asterAdventureRestoreChooserCards", "mov r2,r1\nmov r1,r0"),
+    ):
+        offset = file_offset(source, site)
+        if engine[offset:offset + 4] != branch(site, stock, link=True):
+            raise ValueError(f"Unexpected native call for {entry}")
+        code.extend(bytes(-len(code) % 4))
+        stub = code_address + len(code)
+        compiled = bytearray(assembler.asm(f"""
+            {arguments}
+            adr r0,basepoint
+            ldr ip,[r0]
+            sub r0,r0,ip
+            b #{entries[entry]}
+            basepoint: .word 0
+        """, stub)[0])
+        struct.pack_into("<I", compiled, len(compiled) - 4, stub + len(compiled) - 4)
+        code.extend(compiled)
+        patched[offset:offset + 4] = branch(site, stub, link=True)
 
     # Houdini expects the program table to stay beside the ELF header.
     # The extra header occupies the unused interpreter name and the start of
@@ -120,7 +126,7 @@ def build(base, stock, old_social, star_overlay, sdk, ndk, output, signing):
     write_user_plants(base, output)
     copyfile(old_social.with_name("adventure_levels.inc"), output / "adventure_levels.inc")
     with ZipFile(base) as archive:
-        manifest = manifest_version(archive.read("AndroidManifest.xml"), 320, 315, prefix="A")
+        manifest = manifest_version(archive.read("AndroidManifest.xml"), 321, 315, prefix="A")
         engine = patch_guest(archive.read(ENGINE), ndk, output, old_social, star_overlay)
         original = archive.read(ASSET)
         dynamic = patch_friend_entry(original)
@@ -130,7 +136,7 @@ def build(base, stock, old_social, star_overlay, sdk, ndk, output, signing):
     (output / "libSrc.so").write_bytes(engine)
     plan = create_plan(dynamic, output, rgba_atlases=1)
     companion = social_dex(output / "social-dex", sdk)
-    target = output / "PvZ2-Unline-Aster-A320-ARM32-WSA-existing-data.apk"
+    target = output / "PvZ2-Unline-Aster-A321-ARM32-WSA-existing-data.apk"
     pack_apk(base, {ENGINE: engine, "AndroidManifest.xml": manifest, ASSET: dynamic,
                     BOOTSTRAP: bootstrap, PLAN: plan, dex: companion}, sdk, target, signing,
              excluded=("assets/adventure/friends.json",))

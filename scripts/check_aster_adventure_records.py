@@ -24,7 +24,7 @@ from build_aster_adventure_records import (
     STAR_RESULT_TITLE, STAR_RIBBON_ART, STAR_RIBBON_EMPTY, STAR_RIBBON_GOLD,
     STAR_NEXT_BUTTON, STAR_NEXT_CLICK, STAR_SHOW_CONTINUE, STAR_SHOW_NEXT, STAR_CLICK_CONTINUE,
     SHOP_SCROLLBAR_CALL, SHOP_SCROLLBAR_VISIBLE, START_BUTTON_EVENT, START_CALL,
-    SEED_BANK_REFRESH, SEED_PACKET_DRAW_CALL, SEED_PACKET_DRAW,
+    CHOOSER_RESTORE_CALL, CHOOSER_RESTORE, SEED_BANK_REFRESH, SEED_PACKET_DRAW_CALL, SEED_PACKET_DRAW,
     STOCK_SUN_CLOSE, STOCK_SUN_PURCHASE, SUN_BUTTON_OPEN, UPDATE, VIEWPORT_HIGH_DRAW, WIN, WIN_CALL,
 )
 
@@ -584,6 +584,9 @@ class SocialGame(Game):
             assert arm.reg_read(UC_ARM_REG_SP) == STACK - 16
             arm.reg_write(UC_ARM_REG_SP, STACK)
             self.stock_calls.append("seed-bank-refresh")
+        elif off == CHOOSER_RESTORE:
+            assert (a, b) == (OTHER_HUD, BEST)
+            self.stock_calls.append("restore-chooser-cards")
         elif self.packets and off == SEED_PACKET_DRAW:
             assert (b, c) == (GRAPHICS, TYPE)
             self.stock_calls.append(("draw-packet", self.get(a + 0x98)[0], self.get(a + 0x10c)[0]))
@@ -843,6 +846,8 @@ def check_social_levels(output):
         assert game.arm.mem_read(packet + 0x115, 1) == b"\1"
     game.execute(SEED_BANK_REFRESH, BANK)
     assert "seed-bank-refresh" not in game.stock_calls
+    game.execute(CHOOSER_RESTORE_CALL, OTHER_HUD, BEST, return_from_call=True)
+    assert "restore-chooser-cards" not in game.stock_calls
     game.put(first + 0x98, 3)
     game.put(first + 0x10c, 8)
     game.execute(SEED_PACKET_DRAW_CALL, first, GRAPHICS, TYPE, return_from_call=True)
@@ -870,6 +875,8 @@ def check_social_levels(output):
     assert struct.unpack("<4I", game.files.pop(SOCIAL_EVENT)) == (*menu[:3], 3)
     game.execute(SEED_BANK_REFRESH, BANK)
     assert game.stock_calls[-1] == "seed-bank-refresh"
+    game.execute(CHOOSER_RESTORE_CALL, OTHER_HUD, BEST, return_from_call=True)
+    assert game.stock_calls[-1] == "restore-chooser-cards"
     game.execute(SEED_PACKET_DRAW_CALL, first, GRAPHICS, TYPE, return_from_call=True)
     assert game.stock_calls[-1] == ("draw-packet", 3, 8)
 

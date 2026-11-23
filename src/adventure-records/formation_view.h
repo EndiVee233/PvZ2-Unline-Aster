@@ -96,6 +96,13 @@ extern "C" bool asterAdventureViewSeedBankRefresh(Word base, Object bank) {
     return bank && bank == social.viewBank && isFormationBoard(gameBoard(base));
 }
 
+extern "C" void asterAdventureRestoreChooserCards(Word base, Object chooser, Object savedCards) {
+    // The hidden chooser can still run its initial update. Its saved cards
+    // belong to the viewer and can address slots the preview has removed.
+    if (isFormationBoard(gameBoard(base))) return;
+    native<void>(base, 0x8a0308, chooser, savedCards);
+}
+
 extern "C" void asterAdventureDrawFormationCard(Word base, Object packet, Object graphics, Object art) {
     constexpr Word drawPacket = 0x8ab53c;
     Object bank = social.viewBank;

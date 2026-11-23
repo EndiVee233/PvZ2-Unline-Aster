@@ -22,7 +22,7 @@ enum BorrowArt : Word {
     BorrowAvatarFrame, BorrowLeaves, BorrowPacket, BorrowPacketTier2, BorrowPacketTier3,
     BorrowPacketTier4, BorrowCancel, BorrowCancelDown, BorrowPortrait,
     BorrowCommunityPortrait = BorrowPortrait + friendAvatarCount,
-    BorrowArtCount = BorrowCommunityPortrait + friendAvatarCount
+    BorrowArtCount = BorrowCommunityPortrait + communityAvatarCount
 };
 
 struct BorrowRowView {
@@ -239,10 +239,10 @@ static void loadBorrowDialogArt(Word base) {
     for (Word i = 0; i < BorrowPortrait; ++i) {
         resolveMenuSkin(base, borrow.art[i], keys[i], i >= BorrowCancel ? 3U : 2U);
     }
-    for (Word i = 0; i < friendAvatarCount; ++i) {
+    for (Word i = 0; i < friendAvatarCount; ++i)
         resolveMenuSkin(base, borrow.art[BorrowPortrait + i], friendAvatarKeys[i], 2U);
+    for (Word i = 0; i < communityAvatarCount; ++i)
         resolveMenuSkin(base, borrow.art[BorrowCommunityPortrait + i], communityAvatarKeys[i], 2U);
-    }
     if (!borrow.art[BorrowTab].image) {
         resolveMenuSkin(base, borrow.art[BorrowTab], "IMAGE_UI_GENERIC_TAB_S", 2U);
         resolveMenuSkin(base, borrow.art[BorrowRow], "IMAGE_UI_GAME_INTRO_GAME_INTRO_DIALOG", 2U);
@@ -471,12 +471,12 @@ static void drawBorrowDialogContents(Word base, Object dialog, Object graphics) 
         const bool pressed = row.button && field<unsigned char>(row.button, 0x1e4);
         native<void>(base, 0x1166e74, graphics, false);
         draw(borrow.art[BorrowRow].image, box);
-        draw(borrow.art[BorrowAvatarFrame].image, {box.x + 6, box.y + 6, 66, 66});
         const auto& offer = borrow.offers[index];
-        const Word portrait = offer.avatar < friendAvatarCount && borrow.art[BorrowCommunityPortrait + offer.avatar].image
+        const Word portrait = offer.avatar < communityAvatarCount && borrow.art[BorrowCommunityPortrait + offer.avatar].image
             ? BorrowCommunityPortrait + offer.avatar
             : BorrowPortrait + friendAvatarIndex(borrow.request.owner, offer.id);
-        draw(borrow.art[portrait].image, {box.x + 10, box.y + 10, 58, 58});
+        const Object avatar = borrow.art[portrait].image;
+        draw(avatar ? avatar : borrow.art[BorrowAvatarFrame].image, {box.x + 10, box.y + 10, 58, 58});
         const MenuRect packetBounds{box.x + 210, box.y + 9, 87, 57};
         drawSocialSeedPacket(base, graphics, row, fitBorrowDialog(packetBounds),
                              borrow.art[BorrowPacket].image, borrow.art[BorrowPacket + tier - 1].image, tier);

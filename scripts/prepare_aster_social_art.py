@@ -6,7 +6,7 @@ import json
 import struct
 from zipfile import ZipFile
 
-from PIL import Image
+from PIL import Image, ImageDraw, ImageOps
 
 from merge_legacy_pvp_resources import Bundle, trie_write, u32
 
@@ -176,8 +176,8 @@ def add_social_art(original, archive, cn_user_apk=None):
     return built
 
 
-def add_friend_button_art(original):
-    """Place both supplied HUD sprites in unused space in the social atlas."""
+def edit_social_atlas(original, additions, recolor=None):
+    """Add sprites below the existing cells, optionally updating existing artwork in place."""
     from prepare_offline_pvp_seagull_hd import texture_section
 
     bundle = Bundle(original)
@@ -196,23 +196,74 @@ def add_friend_button_art(original):
         raise ValueError("Expected the existing uncompressed RGBA social atlas")
     canvas = Image.frombytes("RGBA", (width, height), pixels)
     existing = [entry for entry in group["resources"] if entry.get("parent") == atlas["id"]]
+    if recolor:
+        for entry in existing:
+            key = entry["id"].removeprefix("IMAGE_ASTER_SOCIAL_")
+            if key in recolor:
+                x, y, w, h = (entry[field] for field in ("ax", "ay", "aw", "ah"))
+                sprite = canvas.crop((x, y, x + w, y + h))
+                canvas.paste(round_avatar(sprite, recolor[key]), (x, y))
     y = max(entry["ay"] + entry["ah"] for entry in existing) + 4
     x = 4
-    assets = Path(__file__).resolve().parents[1] / "src/adventure-records/art"
-    for filename, name in (("friend-button.png", "FRIEND_BUTTON"),
-                           ("friend-button-down.png", "FRIEND_BUTTON_DOWN")):
-        with Image.open(assets / filename) as image:
-            if image.mode != "RGBA" or x + image.width + 4 > width or y + image.height + 4 > height:
-                raise ValueError(f"Invalid sprite or no room in the social atlas: {filename}")
-            canvas.paste(image, (x, y))
-            group["resources"].append(dict(
-                id="IMAGE_ASTER_SOCIAL_" + name, type="Image", parent=atlas["id"],
-                path=["images", "1536", "aster_social", name.lower()],
-                slot=manifest["slot_count"], ax=x, ay=y, aw=image.width, ah=image.height, aflags=15,
-            ))
-            x += image.width + 4
-            manifest["slot_count"] += 1
+    for name, image in additions.items():
+        if image.mode != "RGBA" or x + image.width + 4 > width or y + image.height + 4 > height:
+            raise ValueError(f"Invalid sprite or no room in the social atlas: {name}")
+        canvas.paste(image, (x, y))
+        group["resources"].append(dict(
+            id="IMAGE_ASTER_SOCIAL_" + name, type="Image", parent=atlas["id"],
+            path=["images", "1536", "aster_social", name.lower()],
+            slot=manifest["slot_count"], ax=x, ay=y, aw=image.width, ah=image.height, aflags=15,
+        ))
+        x += image.width + 4
+        manifest["slot_count"] += 1
     offset = u32(block, 40)
     bundle.payloads[index] = block[:offset] + canvas.tobytes() + block[offset + len(pixels):]
     bundle.replace_manifest(manifest_index, manifest_path, manifest)
     return bundle.build()
+
+
+def round_avatar(sprite, color):
+    """Crop the character to a circle and antialias the colored ring."""
+    diameter = min(sprite.size) * 2
+    image = Image.new("RGBA", (diameter, diameter))
+    draw = ImageDraw.Draw(image)
+
+    def circle(inset):
+        return (inset, inset, diameter - inset - 1, diameter - inset - 1)
+
+    highlight = tuple((value * 3 + 255) // 4 for value in color)
+    shade = tuple(value * 3 // 5 for value in color)
+    draw.ellipse(circle(round(diameter * .01)), fill=(30, 25, 25))
+    draw.ellipse(circle(round(diameter * .024)), fill=shade)
+    draw.ellipse(circle(round(diameter * .039)), fill=highlight)
+    draw.ellipse(circle(round(diameter * .049)), fill=color)
+    draw.ellipse(circle(round(diameter * .078)), fill=shade)
+    inset = round(diameter * .09)
+    size = diameter - 2 * inset
+    portrait = ImageOps.fit(sprite, (size, size), method=Image.Resampling.LANCZOS)
+    mask = Image.new("L", (size, size))
+    ImageDraw.Draw(mask).ellipse((0, 0, size - 1, size - 1), fill=255)
+    image.paste(portrait, (inset, inset), mask)
+    return ImageOps.pad(image, sprite.size, method=Image.Resampling.LANCZOS)
+
+
+def add_round_avatars(original):
+    legacy_colors = (
+        (104, 189, 239), (223, 82, 72), (201, 151, 65),
+        (232, 56, 66), (236, 143, 43), (239, 245, 248),
+    )
+    recolor = {f"ARENA_AVATAR_{i}": color for i, color in enumerate(legacy_colors, 1)}
+    recolor.update({f"CN_USER_AVATAR_{i}": legacy_colors[i - 1] for i in range(3, 7)})
+    recolor["FRIEND_AVATAR"] = (90, 145, 68)
+    additions = {}
+    art = Path(__file__).resolve().parents[1] / "src/adventure-records/art/arena-avatars"
+    new_avatars = (
+        (8, (173, 79, 194)), (14, (109, 219, 239)), (20, (181, 125, 64)),
+        (21, (192, 95, 213)), (23, (242, 187, 60)), (25, (130, 163, 105)),
+    )
+    for i, (source, color) in enumerate(new_avatars, 7):
+        with Image.open(art / f"{source}.png") as sprite:
+            if sprite.size != (256, 256) or sprite.mode != "RGBA":
+                raise ValueError(f"Unexpected Arena avatar sprite: {source}")
+            additions[f"CN_USER_AVATAR_{i}"] = round_avatar(sprite, color)
+    return edit_social_atlas(original, additions, recolor)

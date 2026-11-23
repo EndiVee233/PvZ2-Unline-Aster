@@ -40,6 +40,8 @@ public final class AdventureSocial {
     private static final int FRIEND_LIST = 9, FRIEND_CATALOG = 10, FRIEND_ADD = 11, FRIEND_REMOVE = 12;
     private static final int FRIEND = 0x100;
     private static final int UNKNOWN_AVATAR = -1;
+    static final int LEGACY_AVATAR_COUNT = 6;
+    static final int AVATAR_COUNT = 12;
     private static long nextFramePoll;
     private static File event, exportEvent;
     private static Message activeMenu;
@@ -342,7 +344,8 @@ public final class AdventureSocial {
     }
 
     private static int avatar(JSONObject player) throws IOException, JSONException {
-        return player.has("avatar") ? integer(player, "avatar", 0, 5) : UNKNOWN_AVATAR;
+        if (player.has("avatarIndex")) return integer(player, "avatarIndex", LEGACY_AVATAR_COUNT, AVATAR_COUNT - 1);
+        return player.has("avatar") ? integer(player, "avatar", 0, LEGACY_AVATAR_COUNT - 1) : UNKNOWN_AVATAR;
     }
 
     static String plantType(JSONObject card) throws IOException, JSONException {

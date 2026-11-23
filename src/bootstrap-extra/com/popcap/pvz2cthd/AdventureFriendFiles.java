@@ -153,7 +153,7 @@ final class AdventureFriendFiles {
         }
         int owner = header.getInt();
         int avatar = header.getInt();
-        if (owner == -1 || avatar < 0 || avatar > 5) throw new IOException("Invalid profile");
+        if (owner == -1 || avatar < 0 || avatar >= AdventureSocial.AVATAR_COUNT) throw new IOException("Invalid profile");
         StringBuilder nickname = new StringBuilder();
         for (int i = 0; i < 40; ++i) {
             int code = header.getInt();
@@ -199,8 +199,10 @@ final class AdventureFriendFiles {
             runs.put(encodeRecord(record, alias, info.getBoolean(2)));
         }
         JSONObject result = new JSONObject().put("format", FORMAT).put("version", 1)
-                .put("playerId", id).put("name", name).put("avatar", avatar)
+                .put("playerId", id).put("name", name).put("avatar", avatar % AdventureSocial.LEGACY_AVATAR_COUNT)
                 .put("borrowPlants", loans).put("runs", runs);
+        // Clients with the original six portraits can still read the player file.
+        if (avatar >= AdventureSocial.LEGACY_AVATAR_COUNT) result.put("avatarIndex", avatar);
         byte[] encoded = (result.toString() + "\n").getBytes(StandardCharsets.UTF_8);
         if (encoded.length > MAX_EXPORT_BYTES) throw new IOException("Export exceeds file limit");
         return encoded;
@@ -420,7 +422,7 @@ final class AdventureFriendFiles {
         if (!(player.get("name") instanceof String)) throw new IOException("Invalid nickname");
         String name = PvpPresetDocument.validName(player.getString("name"));
         if (name.isEmpty()) throw new IOException("Empty nickname");
-        int avatar = AdventureSocial.integer(player, "avatar", 0, 5);
+        int avatar = AdventureSocial.integer(player, "avatar", 0, AdventureSocial.LEGACY_AVATAR_COUNT - 1);
         JSONArray rawLoans = player.getJSONArray("borrowPlants");
         if (rawLoans.length() > 3) throw new IOException("Too many loan plants");
         JSONArray loans = new JSONArray();
@@ -452,8 +454,14 @@ final class AdventureFriendFiles {
             AdventureFormationRecord validated = AdventureFormationRecord.read(new java.io.ByteArrayInputStream(record));
             runs.put(encodeRecord(validated, alias, formation));
         }
-        return new JSONObject().put("id", friend).put("playerId", id).put("name", name).put("avatar", avatar)
+        JSONObject result = new JSONObject().put("id", friend).put("playerId", id).put("name", name).put("avatar", avatar)
                 .put("borrowPlants", loans).put("runs", runs);
+        if (player.has("avatarIndex")) {
+            int index = AdventureSocial.integer(player, "avatarIndex",
+                    AdventureSocial.LEGACY_AVATAR_COUNT, AdventureSocial.AVATAR_COUNT - 1);
+            result.put("avatarIndex", index);
+        }
+        return result;
     }
 
     private static byte[] fetch(String address, int limit) throws IOException {

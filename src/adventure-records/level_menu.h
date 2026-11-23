@@ -38,7 +38,7 @@ enum MenuArt : Word {
     GoalLineLeft, GoalLineRight, FriendRow, FriendAvatar, FriendHover,
     FriendPortrait,
     CommunityPortrait = FriendPortrait + friendAvatarCount,
-    MenuArtCount = CommunityPortrait + friendAvatarCount
+    MenuArtCount = CommunityPortrait + communityAvatarCount
 #else
     MenuArtCount
 #endif
@@ -253,10 +253,10 @@ static void loadMenuArt(Word base, Object app) {
 #endif
     for (Word i = 0; i < sizeof(keys) / sizeof(keys[0]); ++i) resolve(i);
 #ifdef ASTER_SOCIAL_ART
-    for (Word i = 0; i < friendAvatarCount; ++i) {
+    for (Word i = 0; i < friendAvatarCount; ++i)
         resolveMenuSkin(base, menuArt[FriendPortrait + i], friendAvatarKeys[i], 2U);
+    for (Word i = 0; i < communityAvatarCount; ++i)
         resolveMenuSkin(base, menuArt[CommunityPortrait + i], communityAvatarKeys[i], 2U);
-    }
 #endif
     constexpr MenuArt delayed[] = {Ribbon, GoalsCard};
     for (Word i = 0; i < 2; ++i) {
@@ -556,13 +556,12 @@ static void renderMenu(Word base, Object dialog, Object graphics) {
 #ifdef ASTER_SOCIAL_ART
         if (menuArt[FriendRow].image) {
             drawImage(FriendRow, box);
-            drawImage(FriendAvatar, {box.x + 19, box.y + 3, 35, 35});
             if (row.friendId) {
-                const auto portrait = row.avatar < friendAvatarCount && menuArt[CommunityPortrait + row.avatar].image
+                const auto portrait = row.avatar < communityAvatarCount && menuArt[CommunityPortrait + row.avatar].image
                     ? MenuArt(CommunityPortrait + row.avatar)
                     : MenuArt(FriendPortrait + friendAvatarIndex(social.id.owner, row.friendId));
                 drawImage(portrait, {box.x + 21, box.y + 5, 31, 31});
-            }
+            } else drawImage(FriendAvatar, {box.x + 21, box.y + 5, 31, 31});
             if (row.selected || pressed) drawImage(FriendHover, box);
             drawText(row.player, {box.x + 56, box.y + 1, box.width - 61, 19}, white);
             drawText(row.time, {box.x + 56, box.y + 20, box.width - 61, 19}, ink);

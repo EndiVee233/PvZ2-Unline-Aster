@@ -2,11 +2,15 @@
 
 namespace {
 constexpr Word friendAvatarCount = 6;
+constexpr Word communityAvatarCount = 12;
 constexpr Word unknownFriendAvatar = ~0U;
-static constexpr char communityAvatarKeys[friendAvatarCount][40] = {
+static constexpr char communityAvatarKeys[communityAvatarCount][40] = {
     "IMAGE_ASTER_SOCIAL_CN_USER_AVATAR_1", "IMAGE_ASTER_SOCIAL_CN_USER_AVATAR_2",
     "IMAGE_ASTER_SOCIAL_CN_USER_AVATAR_3", "IMAGE_ASTER_SOCIAL_CN_USER_AVATAR_4",
-    "IMAGE_ASTER_SOCIAL_CN_USER_AVATAR_5", "IMAGE_ASTER_SOCIAL_CN_USER_AVATAR_6"
+    "IMAGE_ASTER_SOCIAL_CN_USER_AVATAR_5", "IMAGE_ASTER_SOCIAL_CN_USER_AVATAR_6",
+    "IMAGE_ASTER_SOCIAL_CN_USER_AVATAR_7", "IMAGE_ASTER_SOCIAL_CN_USER_AVATAR_8",
+    "IMAGE_ASTER_SOCIAL_CN_USER_AVATAR_9", "IMAGE_ASTER_SOCIAL_CN_USER_AVATAR_10",
+    "IMAGE_ASTER_SOCIAL_CN_USER_AVATAR_11", "IMAGE_ASTER_SOCIAL_CN_USER_AVATAR_12"
 };
 static constexpr char friendAvatarKeys[friendAvatarCount][36] = {
 #ifdef ASTER_SOCIAL_ART
@@ -35,7 +39,7 @@ static Word friendAvatarIndex(Word owner, Word id) {
 }
 
 static bool validFriendAvatar(Word avatar) {
-    return avatar < friendAvatarCount || avatar == unknownFriendAvatar;
+    return avatar < communityAvatarCount || avatar == unknownFriendAvatar;
 }
 
 }

@@ -105,7 +105,7 @@ final class AdventureFriendRoster {
         data.putInt(status).putInt(friends.size()).putInt(rows.size()).putInt(page).putInt(count);
         for (int i = first; i < first + count; i++) {
             JSONObject player = summary(rows.get(i));
-            data.putInt(player.getInt("id")).putInt(player.getInt("avatar"));
+            data.putInt(player.getInt("id")).putInt(player.optInt("avatarIndex", player.getInt("avatar")));
             int end = data.position() + 160;
             player.getString("name").codePoints().limit(39).forEach(data::putInt);
             data.position(end);
@@ -115,8 +115,12 @@ final class AdventureFriendRoster {
 
     private static JSONObject summary(JSONObject player) throws IOException, JSONException {
         int avatar = player.optInt("avatar", -1);
-        return new JSONObject().put("id", player.getInt("id"))
+        JSONObject result = new JSONObject().put("id", player.getInt("id"))
                 .put("name", PvpPresetDocument.validName(player.getString("name")))
-                .put("avatar", avatar >= 0 && avatar < 6 ? avatar : -1);
+                .put("avatar", avatar >= 0 && avatar < AdventureSocial.LEGACY_AVATAR_COUNT ? avatar : -1);
+        int index = player.optInt("avatarIndex", -1);
+        if (index >= AdventureSocial.LEGACY_AVATAR_COUNT && index < AdventureSocial.AVATAR_COUNT)
+            result.put("avatarIndex", index);
+        return result;
     }
 }

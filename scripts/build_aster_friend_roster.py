@@ -1,4 +1,4 @@
-"""Build the ARM32 friend roster and align the world-map HUD."""
+"""Build the ARM32 friend roster and its avatar picker."""
 import argparse
 from io import BytesIO
 from pathlib import Path
@@ -19,6 +19,7 @@ from build_aster_pvp_feedback import pack_apk
 from build_aster_save_path_fix import manifest_version
 from prepare_aster_adventure_levels import write_packet_anchors, write_user_plants
 from prepare_aster_pvp_runtime import file_offset
+from prepare_aster_social_art import add_round_avatars
 from prepare_seasonal_activities import MAP_LAYOUTS
 from prepare_profile_memory import branch
 
@@ -158,16 +159,16 @@ def build(base, previous, stock, old_social, star_overlay, sdk, ndk, output, sig
     with ZipFile(base) as archive:
         engine = patch_guest(archive.read(ENGINE), ndk, output, old_social, star_overlay)
     with ZipFile(previous) as archive:
-        manifest = manifest_version(archive.read("AndroidManifest.xml"), 323, 322, prefix="A")
+        manifest = manifest_version(archive.read("AndroidManifest.xml"), 324, 323, prefix="A")
         original = archive.read(ASSET)
-        dynamic = patch_map_hud(original)
+        dynamic = add_round_avatars(original)
         bootstrap = rebuild_dynamic_bootstrap(archive.read(BOOTSTRAP), output / "bootstrap", original, dynamic)
         dex, = (name for name in archive.namelist() if name.startswith("classes") and name.endswith(".dex")
                 and b"Lcom/popcap/pvz2cthd/AdventureFriendFiles;" in archive.read(name))
     (output / "libSrc.so").write_bytes(engine)
     plan = create_plan(dynamic, output, rgba_atlases=1)
     companion = social_dex(output / "social-dex", sdk)
-    target = output / "PvZ2-Unline-Aster-A323-ARM32-WSA-existing-data.apk"
+    target = output / "PvZ2-Unline-Aster-A324-ARM32-WSA-existing-data.apk"
     pack_apk(previous, {ENGINE: engine, "AndroidManifest.xml": manifest, ASSET: dynamic,
                         BOOTSTRAP: bootstrap, PLAN: plan, dex: companion}, sdk, target, signing)
     print(target)

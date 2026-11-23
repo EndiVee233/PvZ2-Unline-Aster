@@ -14,7 +14,7 @@ enum SunArt : Word {
     SunRow, SunRowDown, SunClaimSkin, SunClaimDown,
     SunCard, SunPortraitFrame, SunCheckOff, SunCheckOn, SunAmountIcon,
     SunAvatar, SunCommunityAvatar = SunAvatar + friendAvatarCount,
-    SunArtCount = SunCommunityAvatar + friendAvatarCount
+    SunArtCount = SunCommunityAvatar + communityAvatarCount
 };
 enum SunAction : Word { SunGifts = 1, SunBuy, SunClaim, SunPrevious, SunNext, SunPick = 16 };
 
@@ -178,10 +178,10 @@ static void loadSunArt(Word base) {
         "IMAGE_UI_GENERIC_RADIO_N", "IMAGE_UI_GENERIC_RADIO_S", "IMAGE_UI_HUD_INGAME_SUN",
     };
     for (Word i = 0; i < SunAvatar; ++i) resolveMenuSkin(base, friendSun.art[i], keys[i], i < SunCard ? 3 : 2);
-    for (Word i = 0; i < friendAvatarCount; ++i) {
+    for (Word i = 0; i < friendAvatarCount; ++i)
         resolveMenuSkin(base, friendSun.art[SunAvatar + i], friendAvatarKeys[i], 2);
+    for (Word i = 0; i < communityAvatarCount; ++i)
         resolveMenuSkin(base, friendSun.art[SunCommunityAvatar + i], communityAvatarKeys[i], 2);
-    }
 }
 
 static Word selectedGiftCount() {
@@ -216,12 +216,12 @@ static void showSunGiftRows(Word base, const char32_t* notice = nullptr) {
             addSunPageControl(base, U"", action, {x, y, 280, 77}, hasCard ? SunCard : SunRow);
             addSunPageControl(base, U"", action, {x + 7, y + 26, 23, 23},
                               friendSun.selected[i] ? SunCheckOn : SunCheckOff);
-            addSunPageControl(base, U"", action, {x + 34, y + 8, 61, 61}, SunPortraitFrame);
             const auto& player = friendSun.friends[i];
-            const auto portrait = player.avatar < friendAvatarCount && friendSun.art[SunCommunityAvatar + player.avatar].image
+            const auto portrait = player.avatar < communityAvatarCount && friendSun.art[SunCommunityAvatar + player.avatar].image
                 ? SunArt(SunCommunityAvatar + player.avatar)
                 : SunArt(SunAvatar + friendAvatarIndex(friendSun.message.owner, player.id));
-            addSunPageControl(base, U"", action, {x + 40, y + 13, 50, 50}, portrait);
+            addSunPageControl(base, U"", action, {x + 40, y + 13, 50, 50},
+                              friendSun.art[portrait].image ? portrait : SunPortraitFrame);
             addSunPageControl(base, label, action, {x + 103, y + 2, 169, 36},
                               SunArtCount, SunArtCount, nullptr, true);
             addSunPageControl(base, U"送来的阳光 +25", action, {x + 103, y + 38, 169, 34},

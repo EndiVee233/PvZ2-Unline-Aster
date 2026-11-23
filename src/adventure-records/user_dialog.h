@@ -36,9 +36,9 @@ struct UserDialog {
     bool requested, friendRequested, pressed, friendPressed, heldPackets;
     UserPreferences data;
     UserPage page;
-    Word action, slot, plantPage, availableCount, avatarPreview;
+    Word action, slot, plantPage, availableCount, avatarPage, avatarPreview;
     struct Choice { Word index, tier; } available[userPlantCount];
-    ButtonSkin portraits[friendAvatarCount];
+    ButtonSkin portraits[communityAvatarCount];
     ButtonSkin packets[4];
     ButtonSkin mapSkin, mapPressed;
     const char32_t* signCaption;
@@ -110,7 +110,7 @@ static void readUserPreferences(Word base, Word profile) {
     if (fd >= 0) {
         bool valid = readExact(base, fd, &user.data, sizeof(user.data)) &&
             native<int>(base, 0x148460, fd, &extra, 1U) == 0 &&
-            user.data.version == 1 && user.data.owner == profile && user.data.avatar < friendAvatarCount;
+            user.data.version == 1 && user.data.owner == profile && user.data.avatar < communityAvatarCount;
         native<int>(base, 0x147b90, fd);
         for (const auto& slot : user.data.loans)
             valid = valid && (!slot[0] || AdventureRecords::validPlantType(slot));
@@ -323,9 +323,9 @@ static void buildFriendBook(Word base) {
         const auto& row = friendBook.entries[i];
         const auto box = borrowRowBounds(i);
         userImage(art[FriendBook::Row].image, box);
-        userImage(art[FriendBook::Avatar].image, {box.x + 6, box.y + 6, 66, 66});
-        const Word avatar = row.avatar < friendAvatarCount ? row.avatar : friendAvatarIndex(user.data.owner, row.id);
-        userImage(user.portraits[avatar].image, {box.x + 10, box.y + 10, 58, 58});
+        const Word avatar = row.avatar < communityAvatarCount ? row.avatar : friendAvatarIndex(user.data.owner, row.id);
+        const Object portrait = user.portraits[avatar].image;
+        userImage(portrait ? portrait : art[FriendBook::Avatar].image, {box.x + 10, box.y + 10, 58, 58});
         char32_t name[18];
         auto* end = append(name, row.name, 10);
         if (row.name[10]) append(end, U"…");
@@ -397,15 +397,21 @@ static void buildCnUserPage(Word base, Object profile, const char32_t* notice) {
     } else {
         userButton(base, U"", UserBack, {264, 11, 52, 48}, false, CnCloseTab, CnCloseTabDown);
         userImage(user.portraits[user.data.avatar].image, {114, 14, 106, 106});
-        for (Word i = 0; i < friendAvatarCount; ++i) {
-            const MenuRect tile{33 + 101 * int(i % 3), 134 + 111 * int(i / 3), 85, 87};
+        const Word start = user.avatarPage * userPageSize;
+        for (Word i = start; i < communityAvatarCount && i < start + userPageSize; ++i) {
+            const Word slot = i - start;
+            const MenuRect tile{33 + 101 * int(slot % 3), 134 + 111 * int(slot / 3), 85, 85};
             userImage(user.portraits[i].image, tile);
             userButton(base, U"", UserAvatar + i, tile);
             if (i == user.avatarPreview)
-                userLabel(base, U"已选中", {tile.x, tile.y + 83, tile.width, 18}, {81, 92, 27, 255});
+                userLabel(base, U"已选中", {tile.x, tile.y + 85, tile.width, 18}, {81, 92, 27, 255});
         }
-        static constexpr char32_t names[][8] = {
-            U"豌豆射手", U"向日葵", U"坚果", U"樱桃炸弹", U"路障僵尸", U"雪人僵尸"
+        if (start) cnAction(base, U"上一页", UserPrev, {33, 368, 107, 39});
+        if (start + userPageSize < communityAvatarCount)
+            cnAction(base, U"下一页", UserNext, {213, 368, 107, 39});
+        static constexpr char32_t names[communityAvatarCount][8] = {
+            U"豌豆射手", U"向日葵", U"坚果", U"樱桃炸弹", U"路障僵尸", U"雪人僵尸",
+            U"大嘴花", U"冰冻生菜", U"土豆地雷", U"小喷菇", U"阳光菇", U"普通僵尸"
         };
         userImage(user.portraits[user.avatarPreview].image, {424, 44, 172, 172});
         userLabel(base, names[user.avatarPreview], {357, 227, 303, 49}, {255, 228, 62, 255});
@@ -691,8 +697,11 @@ static void updateUserDialog(Word base) {
         if (!user.dialog) return;
         user.app = app;
         readUserPreferences(base, id);
-        for (Word i = 0; i < friendAvatarCount; ++i)
-            resolveMenuSkin(base, user.portraits[i], cnArt ? communityAvatarKeys[i] : friendAvatarKeys[i], 2U);
+        for (Word i = 0; i < communityAvatarCount; ++i) {
+            resolveMenuSkin(base, user.portraits[i], communityAvatarKeys[i], 2U);
+            if (!user.portraits[i].image && i < friendAvatarCount)
+                resolveMenuSkin(base, user.portraits[i], friendAvatarKeys[i], 2U);
+        }
         if (openFriends) {
             user.page = UserPage::Friends;
             friendBook.rosterCount = friendBook.total = friendBook.page = 0;
@@ -744,11 +753,14 @@ static void updateUserDialog(Word base) {
     if (action == UserBack) user.page = user.page == UserPage::Plants ? UserPage::Loans : UserPage::Home;
     else if (action == UserAvatars) {
         user.avatarPreview = user.data.avatar;
+        user.avatarPage = user.avatarPreview / userPageSize;
         user.page = UserPage::Avatars;
     }
     else if (action == UserLoans) user.page = UserPage::Loans;
     else if (user.page == UserPage::Avatars) {
-        const bool picked = action >= UserAvatar && action < UserAvatar + friendAvatarCount;
+        if (action == UserPrev && user.avatarPage) --user.avatarPage;
+        if (action == UserNext && (user.avatarPage + 1) * userPageSize < communityAvatarCount) ++user.avatarPage;
+        const bool picked = action >= UserAvatar && action < UserAvatar + communityAvatarCount;
         if (picked) user.avatarPreview = action - UserAvatar;
         if (action == UserConfirmAvatar || (picked && !userHasCnArt())) {
             const Word before = user.data.avatar;

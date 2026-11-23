@@ -32,13 +32,14 @@ def use_extraction_title_art(source):
  return source[:start]+body+source[end:]
 
 
-def rebuild_bootstrap(original, out, replacements, apktool, *, extraction_art=False, transform=None):
+def rebuild_bootstrap(original, out, replacements, apktool, *, extraction_art=False, transform=None,
+                      class_path='com/popcap/pvz2cthd/BootActivity.smali'):
  out=Path(out);out.mkdir(parents=True,exist_ok=True)
  (out/'original.dex').write_bytes(original)
  subprocess.run(['javac','-cp',str(apktool),'-d',str(out),str(Path(__file__).with_name('RepairDex.java'))],check=True)
  cp=str(apktool)+os.pathsep+str(out)
  subprocess.run(['java','-Xmx256m','-cp',cp,'RepairDex','decode',str(out/'original.dex'),str(out/'smali')],check=True)
- p=out/'smali/com/popcap/pvz2cthd/BootActivity.smali';s=p.read_text(encoding='utf8')
+ p=out/'smali'/class_path;s=p.read_text(encoding='utf8')
  # One substitution pass avoids cascading if the new base checksum equals the old target.
  for old in replacements:assert old in s,old
  if replacements:s=re.sub('|'.join(re.escape(k) for k in replacements),lambda m:replacements[m[0]],s)

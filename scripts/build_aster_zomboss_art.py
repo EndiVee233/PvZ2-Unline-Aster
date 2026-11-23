@@ -1,4 +1,4 @@
-"""Attach the stock teleport effects to the Egyptian Zomboss resource group."""
+"""Attach stock teleport and phase-change effects to the Egyptian Zomboss group."""
 
 import argparse
 from copy import deepcopy
@@ -27,10 +27,11 @@ from rebuild_bootstrap_dex import rebuild_bootstrap
 
 DONOR = "ZombossMechCommonGroup"
 EGYPT = "ZombieEgyptZombossGroup"
-ANIMATION_IDS = ("POPANIM_EFFECTS_ZOMBOSS_TELEPORTATION_BALL",
-                 "POPANIM_EFFECTS_ZOMBOSS_TELEPORT_BALL_EXIT")
+TELEPORT_ANIMATIONS = ("POPANIM_EFFECTS_ZOMBOSS_TELEPORTATION_BALL",
+                      "POPANIM_EFFECTS_ZOMBOSS_TELEPORT_BALL_EXIT")
+ANIMATION_IDS = TELEPORT_ANIMATIONS + ("POPANIM_EFFECTS_ZOMBOSS_DAMAGE_CHUNKS",)
 ENGINE = "lib/armeabi/libSrc.so"
-ART_HOOKS = (0xBB3828, 0xBB3940, 0xBBD0A4, 0xBE7060)
+ART_HOOKS = (0xBB3828, 0xBB3940, 0xBBA050, 0xBBD0A4, 0xBE7060)
 ART_LOOKUP = 0xE45D08
 PATCH_ASSET = "assets/reconstruction/aster-zomboss-art.patch"
 
@@ -50,7 +51,7 @@ def append_aligned(pool, data):
     return offset
 
 
-def install_teleport_art(original):
+def install_boss_art(original, animation_ids):
     bundle = Bundle(original)
     manifest_index, manifest_path, manifest = bundle.manifest()
     groups = {g["id"]: g for g in manifest["groups"]}
@@ -71,7 +72,7 @@ def install_teleport_art(original):
     files = bundle.files(common_index)
     resident = bytearray(section(bundle, common_index))
     used_images = set()
-    for old_id in ANIMATION_IDS:
+    for old_id in animation_ids:
         source = animations[old_id]
         path = resource_path(source)
         kind, offset, size = donor_files[path]
@@ -94,7 +95,7 @@ def install_teleport_art(original):
             changed[end - len(rename):end] = rename
         # Timelines and event labels stay byte-for-byte identical.
         if bytes(changed[index.sprites[0]["start"]:]) != art[index.sprites[0]["start"]:]:
-            raise ValueError("Teleport animation timeline changed")
+            raise ValueError("Zomboss animation timeline changed")
         copy = add_resource(common, source, id=alias_id(old_id),
                             path=source["path"][:-1] + ["aster_" + source["path"][-1]])
         files.append((resource_path(copy), (0, append_aligned(resident, changed), size)))
@@ -108,7 +109,7 @@ def install_teleport_art(original):
     atlas, = (r for r in resources if r.get("atlas"))
     copies = {r["id"]: r for r in resources if r.get("parent") == atlas["id"] and r["id"] in used_images}
     if copies.keys() != used_images:
-        raise ValueError(f"Missing stock teleport sprites: {sorted(used_images - copies.keys())}")
+        raise ValueError(f"Missing stock Zomboss sprites: {sorted(used_images - copies.keys())}")
     atlas_path = "aster_egypt_zomboss_teleport_1536"
     atlas_id = "ATLASIMAGE_ATLAS_" + atlas_path.upper()
     add_resource(target_group, atlas, id=atlas_id, path=["atlases", atlas_path])
@@ -137,32 +138,46 @@ def install_teleport_art(original):
     return bundle, {common_index, target, manifest_index}
 
 
-def encode_bundle_patch(original):
-    bundle, changed_groups = install_teleport_art(original)
-    rebuilt = bundle.build()
-    check = Bundle(rebuilt)
-    first_offset = bundle.groups[0]["fields"][0]
-    new_first_offset = check.groups[0]["fields"][0]
-    edits = [(0, first_offset, rebuilt[:new_first_offset])]
-    cursor, new_cursor = first_offset, new_first_offset
-    for index, (old, new) in enumerate(zip(bundle.groups, check.groups, strict=True)):
-        offset, size = old["fields"][:2]
-        new_offset, new_size = new["fields"][:2]
-        if cursor != offset or new_cursor != new_offset or old["ID"] != new["ID"]:
+def archive_spans(archive):
+    first_offset = archive.groups[0]["fields"][0]
+    spans = [(0, first_offset)]
+    cursor = first_offset
+    for group in archive.groups:
+        offset, size = group["fields"][:2]
+        if offset != cursor:
             raise ValueError("The resource archive has an unexpected group layout")
+        spans.append((offset, size))
         cursor += size
-        new_cursor += new_size
-        replacement = rebuilt[new_offset:new_cursor]
-        if index in changed_groups:
-            edits.append((offset, size, replacement))
-        elif original[offset:cursor] != replacement:
-            raise ValueError(f"Unrelated resources changed: {old['ID']}")
-    if cursor != len(original) or new_cursor != len(rebuilt):
+    if cursor != len(archive.data):
         raise ValueError("Unexpected bytes after the last resource group")
-    parts = [struct.pack(">4sIII", b"AZB1", len(original), len(rebuilt), len(edits)),
-             sha256(original).digest(), sha256(rebuilt).digest()]
-    for offset, size, data in edits:
-        parts.extend((struct.pack(">III", offset, size, len(data)), data))
+    return spans
+
+
+def encode_bundle_patch(original):
+    teleport_only, _ = install_boss_art(original, TELEPORT_ANIMATIONS)
+    complete, changed_groups = install_boss_art(original, ANIMATION_IDS)
+    sources = [Bundle(original), Bundle(teleport_only.build())]
+    target = Bundle(complete.build())
+    group_names = [group["ID"] for group in target.groups]
+    for source in sources:
+        if [group["ID"] for group in source.groups] != group_names:
+            raise ValueError("The resource archive has different groups")
+    changed = {0, *(index + 1 for index in changed_groups)}
+    parts = [struct.pack(">4sIII", b"AZB2", len(target.data), len(changed), len(sources)),
+             sha256(target.data).digest()]
+    for source in sources:
+        parts.extend((struct.pack(">I", len(source.data)), sha256(source.data).digest()))
+    source_spans = [archive_spans(source) for source in sources]
+    for index, (offset, size) in enumerate(archive_spans(target)):
+        data = target.data[offset:offset + size]
+        for source, spans in zip(sources, source_spans, strict=True):
+            old_offset, old_size = spans[index]
+            if index in changed:
+                parts.append(struct.pack(">II", old_offset, old_size))
+            elif source.data[old_offset:old_offset + old_size] != data:
+                raise ValueError(f"Unrelated resources changed: {group_names[index - 1]}")
+        if index in changed:
+            parts.extend((struct.pack(">I", size), data))
     return zlib.compress(b"".join(parts), level=9)
 
 
@@ -228,6 +243,22 @@ def insert_update(smali):
     return smali.replace(anchor, anchor + "\n" + hook)
 
 
+def allow_installed_update(smali):
+    start = smali.index(".method public static ensureBaseline(Landroid/content/Context;)V")
+    end = smali.index(".end method", start)
+    method = smali[start:end]
+    anchor = "    if-eqz v13, :cond_55\n"
+    if method.count(anchor) != 1:
+        raise ValueError("Unexpected resource baseline layout")
+    check = (
+        "\n    invoke-static {p0, v1, v7}, Lcom/popcap/pvz2cthd/AsterZombossArt;"
+        "->matchesPatchedArchive(Landroid/content/Context;Ljava/io/File;Ljava/lang/String;)Z\n"
+        "    move-result v13\n"
+        "    if-nez v13, :cond_55\n"
+    )
+    return smali[:start] + method.replace(anchor, anchor + check) + smali[end:]
+
+
 def build_dex(sdk, output):
     classes = output / "zomboss-art-java"
     classes.mkdir(exist_ok=True)
@@ -239,7 +270,8 @@ def build_dex(sdk, output):
                                               for n in names)], check=True)
     subprocess.run(["java", "-cp", sdk / "build-tools/34.0.0/lib/d8.jar", "com.android.tools.r8.D8",
                     "--min-api", "21", "--lib", android, "--output", classes,
-                    *(classes / package / f"{n}.class" for n in names)], check=True)
+                    *(classes / package / f"{n}.class" for n in names),
+                    *sorted((classes / package).glob("AsterZombossArt$*.class"))], check=True)
     return (classes / "classes.dex").read_bytes()
 
 
@@ -247,11 +279,16 @@ def build(base, zombie1, output, sdk, ndk, signing):
     output.mkdir(parents=True, exist_ok=True)
     with ZipFile(base) as apk:
         native = patch_engine(apk.read(ENGINE), ndk, output)
-        boot = rebuild_bootstrap(apk.read(BOOTSTRAP), output / "bootstrap", {},
-                                 ROOT.parent / "tools/apktool.jar", transform=insert_update)
-        manifest = manifest_version(apk.read("AndroidManifest.xml"), 330, 329, prefix="A")
-    result = output / "PvZ2-Unline-Aster-A330-ARM32-WSA-existing-data.apk"
-    pack_apk(base, {ENGINE: native, BOOTSTRAP: boot, "classes9.dex": build_dex(sdk, output),
+        apktool = ROOT.parent / "tools/apktool.jar"
+        boot = rebuild_bootstrap(apk.read(BOOTSTRAP), output / "bootstrap", {}, apktool,
+                                 transform=insert_update)
+        baseline = rebuild_bootstrap(apk.read("classes7.dex"), output / "baseline", {}, apktool,
+                                     transform=allow_installed_update,
+                                     class_path="com/popcap/pvz2cthd/AsterRgbaPilot.smali")
+        manifest = manifest_version(apk.read("AndroidManifest.xml"), 331, 329, prefix="A")
+    result = output / "PvZ2-Unline-Aster-A331-ARM32-WSA-existing-data.apk"
+    pack_apk(base, {ENGINE: native, BOOTSTRAP: boot, "classes7.dex": baseline,
+                    "classes9.dex": build_dex(sdk, output),
                     "AndroidManifest.xml": manifest}, sdk, result, signing,
              extra_entries={PATCH_ASSET: encode_bundle_patch(zombie1.read_bytes())})
     print(result)

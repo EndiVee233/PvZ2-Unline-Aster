@@ -36,6 +36,8 @@ extern "C" Object asterZombossArt(Word base, Object result, const char* const* r
         name = "POPANIM_EFFECTS_EGYBOSS_TELEPORTATION_BALL";
     } else if (equal(old, "POPANIM_EFFECTS_ZOMBOSS_TELEPORT_BALL_EXIT")) {
         name = "POPANIM_EFFECTS_EGYBOSS_TELEPORT_BALL_EXIT";
+    } else if (equal(old, "POPANIM_EFFECTS_ZOMBOSS_DAMAGE_CHUNKS")) {
+        name = "POPANIM_EFFECTS_EGYBOSS_DAMAGE_CHUNKS";
     }
     if (!name) return native<Object>(base, Animation, result, resource);
 

@@ -15,7 +15,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def patch_native(native, ndk, output, *, world_resources=False, mount_campaign=False,
-                 guard_chooser_resume=False, offline_sign_in=False, refresh_sign_in=False):
+                 guard_chooser_resume=False, offline_sign_in=False, refresh_sign_in=False,
+                 sign_in_hooks=None, four_column_sign_in=False):
     if refresh_sign_in and (not offline_sign_in or world_resources or mount_campaign or guard_chooser_resume):
         raise ValueError("Refreshing sign-in reuses the installed HUD and world patches")
     output.mkdir(parents=True, exist_ok=True)
@@ -229,7 +230,8 @@ SECTIONS {{
 
         def wrap_sign(site, expected, source, link=False):
             if refresh_sign_in:
-                expected = struct.unpack("<I", branch(site, previous_targets[site], link))[0]
+                targets = previous_targets if sign_in_hooks is None else sign_in_hooks
+                expected = struct.unpack("<I", branch(site, targets[site], link))[0]
             wrap(site, expected, source, link)
         # The native widget has already checked pointer release and played its click sound.
         wrap_sign(0xa1c920, 0xe3a01003, f"""
@@ -298,6 +300,36 @@ SECTIONS {{
             beq #0xf69068
             b #0xf68f5c
         """)
+        # The shared draw hook lays out the stock image between the two labels.
+        icon_site, icon_end = 0xf62800, 0xf628f8
+        icon_skip = branch(icon_site, icon_end)
+        current = native[file_offset(elf, icon_site):file_offset(elf, icon_site) + 4]
+        if current != icon_skip:
+            assert current == struct.pack("<I", 0xe59480a4), hex(icon_site)
+            hooks[icon_site] = (icon_end, icon_skip)
+        if four_column_sign_in:
+            wrap(0xf62268, struct.unpack("<I", branch(0xf62268, 0x9734b0, True))[0], f"""
+                mov r3,r2
+                mov r2,r1
+                mov r1,r0
+                {get_base}
+                b #{symbols['asterDailySignPaper']}
+            """, True)
+            # Allow for the native scroll widget's left inset when centering the grid.
+            wrap(0xf64b14, 0xe0888108, """
+                lsl r8,r8,#2
+                add r8,r8,r5,lsl #2
+                add r8,r8,r5,lsr #1
+                b #0xf64b1c
+            """)
+            # Use the same wider horizontal spacing in the origin and tile advance.
+            for site in (0xf64b04, 0xf64cf0):
+                wrap(site, struct.unpack("<I", branch(site, 0x15deccc, True))[0], """
+                    mov r1,#0x42000000
+                    b #0x15deccc
+                """, True)
+            # The original computes index / 5 * 5 for the row break.
+            wrap(0xf64c6c, 0xe0c23294, "bic r3,r4,#3\nb #0xf64c7c")
 
     old_rw = state["p_offset"]
     old_rw_end = old_rw + state["p_filesz"]

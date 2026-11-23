@@ -45,12 +45,13 @@ static constexpr unsigned signClaimed = 0x3a4;
 static constexpr unsigned signDate = 0x3b4;
 static constexpr unsigned signTileClaimed = 0x3c8;
 static constexpr unsigned noOwner = ~0U;
+static constexpr char claimMarkKey[] = "IMAGE_EFFECTS_SIGNREWARD_GET_SIGNREWARD_GET_136X106";
 static Reward rewards[31];
 static DayReward resolvedRewards[31];
 static const char* nativeAliases[unsigned(Item::Count)];
 struct TileLabels { const char32_t* lines[2]; };
 static TileLabels tileLabels[31];
-static const char32_t* todayLabels[2];
+static Object claimMark;
 static bool calendarClaimed;
 static Calendar calendar;
 static unsigned calendarOwner = noOwner;
@@ -155,9 +156,6 @@ static bool prepareCalendar(Address base, Object player, Seconds when) {
             for (auto& line : tile.lines) releaseLabel(base, line);
         }
     }
-    if (!samePanelDay) {
-        for (auto& label : todayLabels) releaseLabel(base, label);
-    }
     const DayReward* month = monthRewards(today);
     for (int index = 0; index < days; ++index) {
         if (samePanelDay && claimed && index + 1 == today.day) continue;
@@ -218,6 +216,18 @@ static void makeLabel(Address base, const char32_t** output, const char32_t* tex
     native<void>(base, 0x14eb451, output, text, &allocator);
 }
 
+static Object rewardImage(Address base, const char* key) {
+    struct ImageDescriptor { unsigned reserved[3]; const char* key; unsigned ref[2]; };
+    ImageDescriptor descriptor;
+    descriptor.key = key;
+    descriptor.ref[0] = descriptor.ref[1] = 0;
+    struct ImageSkin { unsigned drawMode; Object image; unsigned options[6]; } skin;
+    skin.image = nullptr;
+    native<void>(base, 0x7e8a28, &skin, &descriptor, 2U);
+    native<void>(base, 0x1d9bb4, &descriptor.ref, 0U, 0U, 0U);
+    return skin.image;
+}
+
 extern "C" void asterDailySignTile(Address base, Object tile, const Reward* reward) {
     const Reward display{reward->alias, reward->type, 0};
     native<void>(base, 0xf6347c, tile, &display, 1);
@@ -226,27 +236,13 @@ extern "C" void asterDailySignTile(Address base, Object tile, const Reward* rewa
     const DayReward day = resolvedRewards[index];
     const ItemSpec& item = items[unsigned(day.item)];
     if (reward->type == 9) {
-        struct ImageDescriptor { unsigned reserved[3]; const char* key; unsigned ref[2]; };
         const bool costume = day.kind == Kind::Costume || day.kind == Kind::CostumeShard;
-        ImageDescriptor descriptor;
-        descriptor.key = costume ? item.costumeIcon : item.icon;
-        descriptor.ref[0] = descriptor.ref[1] = 0;
-        struct ImageSkin { unsigned drawMode, image, options[6]; } skin;
-        skin.image = 0;
-        native<void>(base, 0x7e8a28, &skin, &descriptor, 2U);
-        native<void>(base, 0x1d9bb4, &descriptor.ref, 0U, 0U, 0U);
-        if (skin.image) field<unsigned>(tile, 0xa4) = skin.image;
+        if (const auto image = rewardImage(base, costume ? item.costumeIcon : item.icon))
+            field<Object>(tile, 0xa4) = image;
     }
+    if (index + 1 == calendarDay % 32)
+        claimMark = rewardImage(base, claimMarkKey);
     char32_t text[24];
-    char32_t* end = writeLabel(text, U"", index + 1);
-    *end++ = U'日';
-    native<void>(base, 0x14ea6fd, tile + 0xc8, text, unsigned(end - text));
-    if (index + 1 == calendarDay % 32 && !todayLabels[0]) {
-        end[0] = U' '; end[1] = U'可'; end[2] = U'领'; end[3] = 0;
-        makeLabel(base, &todayLabels[0], text);
-        end[1] = U'已';
-        makeLabel(base, &todayLabels[1], text);
-    }
     auto& labels = tileLabels[index];
     if (!labels.lines[0]) {
         char32_t* name = text;
@@ -279,22 +275,65 @@ struct DrawStack {
     unsigned flags;
 };
 
+extern "C" void asterDailySignPaper(Address base, Object graphics, const int* frame, Object texture) {
+    native<void>(base, 0x9734b0, graphics, frame, texture);
+    struct Color { int red, green, blue, alpha; };
+    const Color previous = field<Color>(graphics, 0x4c);
+    const Color paper{201, 183, 149, 255};
+    const int border = 4;
+    const int x = frame[0] + border;
+    const int y = frame[1] + border;
+    const int width = frame[2] - border * 2;
+    const int height = frame[3] - border * 2;
+    if (width <= 16 || height <= 16) return;
+    native<void>(base, 0x1166c30, graphics, &paper);
+    // Follow the rounded corners of the original inset.
+    constexpr int corners[] = {6, 4, 3, 2, 1, 1};
+    constexpr int radius = sizeof(corners) / sizeof(corners[0]);
+    native<void>(base, 0x1167010, graphics, x, y + radius, width, height - radius * 2);
+    for (int row = 0; row < radius; ++row) {
+        const int inset = corners[row];
+        native<void>(base, 0x1167010, graphics, x + inset, y + row, width - inset * 2, 1);
+        native<void>(base, 0x1167010, graphics, x + inset, y + height - row - 1, width - inset * 2, 1);
+    }
+    native<void>(base, 0x1166c30, graphics, &previous);
+}
+
+static void drawRewardImage(Address base, Object graphics, Object image,
+                            int centerX, int centerY, int maxWidth, int maxHeight) {
+    if (!image) return;
+    const int width = field<int>(image, 0x28);
+    const int height = field<int>(image, 0x2c);
+    if (width <= 0 || height <= 0) return;
+    const float fitX = float(maxWidth) / width;
+    const float fitY = float(maxHeight) / height;
+    const float scale = fitX < fitY ? fitX : fitY;
+    const int drawnWidth = int(width * scale);
+    const int drawnHeight = int(height * scale);
+    native<void>(base, 0x11698b4, graphics, image, centerX - drawnWidth / 2, centerY - drawnHeight / 2,
+                 drawnWidth, drawnHeight);
+}
+
 extern "C" void asterDailySignDraw(Address base, const DrawRegisters& args, const DrawStack& stack) {
     auto draw = [&](float y, const char32_t* const* text) {
         native<void>(base, 0x13af2d0, args.app, args.graphics, args.x, y, stack.width,
                      text, stack.alignment, stack.style, stack.flags);
     };
     const int index = field<int>(args.tile, 0xd8);
-    const bool current = index + 1 == calendarDay % 32;
-    const auto* today = &todayLabels[calendarClaimed];
-    draw(args.y, current && *today ? today : stack.text);
-    if (index < 0 || index >= calendar.end - calendar.begin) return;
-    const float spacing = float(field<int>(args.tile, 0x34)) * 0.15f;
-    float y = args.y;
-    for (const auto& line : tileLabels[index].lines) {
-        if (!line) break;
-        y += spacing;
-        draw(y, &line);
+    if (index < 0 || index >= calendar.end - calendar.begin) {
+        draw(args.y, stack.text);
+        return;
+    }
+    const auto& labels = tileLabels[index];
+    const int width = field<int>(args.tile, 0x30);
+    const int height = field<int>(args.tile, 0x34);
+    drawRewardImage(base, args.graphics, field<Object>(args.tile, 0xa4),
+                    width / 2, height * 45 / 100, width * 68 / 100, height * 44 / 100);
+    draw(args.y, &labels.lines[0]);
+    draw(height * 0.65f, &labels.lines[1]);
+    if (calendarClaimed && index + 1 == calendarDay % 32) {
+        drawRewardImage(base, args.graphics, claimMark, width / 2, height * 72 / 100,
+                        width * 45 / 100, height * 36 / 100);
     }
 }
 

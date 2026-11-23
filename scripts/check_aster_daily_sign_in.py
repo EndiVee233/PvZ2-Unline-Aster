@@ -53,8 +53,12 @@ def verify(engine, report, base, pool, plants):
     clock = date(2028, 2, 25)
     shown = 0
     awards = []
-    labels = []
     draw_calls = []
+    checkmark, reward_image = STACK + 0x9000, STACK + 0x9100
+    write_word(emu, checkmark + 0x28, 90)
+    write_word(emu, checkmark + 0x2c, 70)
+    write_word(emu, reward_image + 0x28, 64)
+    write_word(emu, reward_image + 0x2c, 64)
     wide_strings = {}
     next_string = WIDE_STRINGS + 12
     strings = {}
@@ -141,21 +145,16 @@ def verify(engine, report, base, pool, plants):
             assert arg == tile and uc.reg_read(UC_ARM_REG_R2) == 1
             _, kind, amount = struct.unpack("<3I", uc.mem_read(uc.reg_read(UC_ARM_REG_R1), 12))
             assert kind in (0, 1, 2, 9) and amount == 0
+            write_word(uc, tile + 0xa4, reward_image)
             result = 0
         elif site == 0x7e8a28:
             desc = uc.reg_read(UC_ARM_REG_R1)
             image = bytes(uc.mem_read(read_word(uc, desc + 12), 64)).split(b"\0", 1)[0]
             assert image.startswith(b"IMAGE_")
-            write_word(uc, arg + 4, 0xabcd)
+            write_word(uc, arg + 4, checkmark if image.endswith(b"GET_136X106") else reward_image)
             result = 0
         elif site == 0x1d9bb4:
             result = 0
-        elif site == 0x14ea6fc:
-            assert arg == tile + 0xc8
-            address, length = (uc.reg_read(reg) for reg in (UC_ARM_REG_R1, UC_ARM_REG_R2))
-            labels.append(bytes(uc.mem_read(address, length * 4)).decode("utf-32-le"))
-            write_word(uc, arg, OBJECTS)
-            result = arg
         elif site == 0x14eb450:
             nonlocal next_string
             address = uc.reg_read(UC_ARM_REG_R1)
@@ -172,7 +171,19 @@ def verify(engine, report, base, pool, plants):
         elif site == 0x13af2d0:
             sp = uc.reg_read(UC_ARM_REG_SP)
             entry = read_word(uc, read_word(uc, sp + 4))
-            draw_calls.append(wide_strings.get(entry, labels[-1]))
+            draw_calls.append(wide_strings[entry])
+            result = 0
+        elif site == 0x11698b4:
+            image = uc.reg_read(UC_ARM_REG_R1)
+            x, y = (uc.reg_read(reg) for reg in (UC_ARM_REG_R2, UC_ARM_REG_R3))
+            width, height = struct.unpack("<2I", uc.mem_read(uc.reg_read(UC_ARM_REG_SP), 8))
+            if image == checkmark:
+                assert (x, y, width, height) == (28, 69, 45, 35)
+                draw_calls.append("checkmark")
+            else:
+                assert image == reward_image
+                assert (x, y, width, height) == (24, 28, 52, 52)
+                draw_calls.append("reward image")
             result = 0
         elif site in (0x708e18, 0x708890, 0x706da0):
             name = read_string(uc, read_word(uc, uc.reg_read(UC_ARM_REG_R1)))
@@ -270,15 +281,17 @@ def verify(engine, report, base, pool, plants):
         assert (read_string(emu, alias), kind, amount) == (expected_alias, expected_kind, expected_amount), clock
         run(report["symbols"]["asterDailySignTile"], base, tile, entry)
         write_word(emu, tile + 0xd8, clock.day - 1)
+        write_word(emu, tile + 0x30, 100)
         write_word(emu, tile + 0x34, 120)
         draw_regs, draw_stack = OBJECTS + 0xa00, OBJECTS + 0xb00
         emu.mem_write(draw_regs, struct.pack("<IIffI", APP, 0, 0, 14, tile))
         emu.mem_write(draw_stack, struct.pack("<f4I", 100, tile + 0xc8, 1, 0, 0))
         run(report["symbols"]["asterDailySignDraw"], base, draw_regs, draw_stack)
-        status = "已领" if claimed else "可领"
-        assert draw_calls == [f"{clock.day}日 {status}", item, f"×{amount}"], (clock, draw_calls)
+        expected = ["reward image", item, f"×{amount}"]
+        if claimed:
+            expected.append("checkmark")
+        assert draw_calls == expected, (clock, draw_calls)
         draw_calls.clear()
-        labels.clear()
 
     def today_entry():
         start, days = open_panel()

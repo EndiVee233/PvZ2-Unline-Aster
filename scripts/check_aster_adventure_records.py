@@ -470,7 +470,7 @@ class SocialGame(Game):
         self.menu_buttons = {}
         self.labels = []
         self.cleared = True
-        self.trophy_progress = {}
+        self.trophy_progress = {(1, "egypt11"): 3}
         self.earned = 0
         self.put(APP + 0x524, 1600, 1000)
         self.put(APP + 0x690, 0x3f800000)
@@ -530,8 +530,8 @@ class SocialGame(Game):
         elif off == 0x708104:
             assert a == PROFILE
             alias = self.string(self.get(b)[0])
-            if alias in ("egypt11", "pirate10"):
-                out = self.trophy_progress.get(self.get(STORE + 0x74)[0], 1)
+            if alias in ("egypt11", "pirate10", "cowboy10"):
+                out = self.trophy_progress.get((self.get(STORE + 0x74)[0], alias), 1)
             else:
                 out = 3 if self.cleared else 1
         elif off == 0x14c1a7c:
@@ -976,7 +976,7 @@ def check_world_trophy(output):
                 game.arm.hook_del(hook)
 
     for progress in (1, 2):
-        game.trophy_progress[1] = progress
+        game.trophy_progress[1, "egypt11"] = progress
         assert game.choose() is None
         assert game.launched.pop()[2] == "egypt1" and not game.menu_buttons
         game.put(BOARD + 0x7f0, 2)
@@ -986,7 +986,7 @@ def check_world_trophy(output):
     assert star_module_target() == STAR_MODULE_LOCKED
     assert star_module_target(main_cleared=1) == STAR_MODULE_GATE + 4
 
-    game.trophy_progress[1] = 3
+    game.trophy_progress[1, "egypt11"] = 3
     for day, tier in ((1, 1), (2, 3)):
         game.choose(f"egypt{day}".encode())
         game.update_menu()
@@ -1103,12 +1103,21 @@ def check_campaign_levels(output):
 
     game = SocialGame(output)
     game.arm.mem_write(STAGE_TEXT, b"pirate\0")
-    game.cleared = False
-    assert game.choose(b"pirate8", MAP_LEVEL_CALLS[1]) is None
-    assert game.launched.pop() == (SCENE, "pirate", "pirate8", 0xffffffff, 1, 1)
-    game.update_menu()
-    assert not game.menu_buttons and SOCIAL_EVENT not in game.files
-    game.trophy_progress[1] = 3
+    # Even a completed level has no tier access with only Egypt's trophy or
+    # a pending Pirate Seas reward. Test both a completed and an unplayed day.
+    for day, cleared, progress in ((7, True, 1), (7, True, 2), (8, False, 1)):
+        game.cleared = cleared
+        game.trophy_progress[1, "pirate10"] = progress
+        alias = f"pirate{day}"
+        assert game.choose(alias.encode(), MAP_LEVEL_CALLS[1]) is None
+        assert game.launched.pop() == (SCENE, "pirate", alias, 0xffffffff, 1, 1)
+        game.update_menu()
+        assert not game.menu_buttons and SOCIAL_EVENT not in game.files
+        game.put(BOARD + 0x7f0, 2)
+        game.put(BOARD + 0x8a0, 1)
+        assert game.execute("asterAdventureSelectChallenge", BASE, BOARD, PROPERTIES)
+        assert game.get(BOARD + 0x7f0) == (0xffffffff,) and game.get(BOARD + 0x8a0) == (0,)
+    game.trophy_progress[1, "pirate10"] = 3
     msg = game.choose(b"pirate8", MAP_LEVEL_CALLS[1])
     assert msg[2] == catalog["pirate8"][0]
     game.update_menu()

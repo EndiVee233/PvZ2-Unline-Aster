@@ -366,18 +366,25 @@ extern "C" bool asterAdventureSelectChallenge(Word base, Object board, Object pr
     const Word day = level->key;
     int index = -1;
     if (social.phase != SocialPhase::Loading || day != social.id.day) {
-        const auto choice = selectedChallenge;
-        if (!properties || day != choice.day || choice.stars > level->stars ||
-            choice.owner != owner(ownerStore(base)) ||
-            (!choice.applied && static_cast<int>(wallTime(base) - choice.expires) >= 0)) return false;
-        if (choice.stars) {
-            const Word first = field<Word>(properties, 0x1c);
-            const Word last = field<Word>(properties, 0x20);
-            if (!first || last < first || last - first < choice.stars * 12) return false;
-            index = int(choice.stars) - 1;
+        if (!properties) return false;
+        auto& choice = selectedChallenge;
+        const bool chosen = day == choice.day && choice.stars <= level->stars &&
+            choice.owner == owner(ownerStore(base)) &&
+            (choice.applied || static_cast<int>(wallTime(base) - choice.expires) < 0);
+        if (chosen) {
+            if (choice.stars && !choice.applied && !starChallengesUnlocked(base, *level)) choice.stars = 0;
+            if (choice.stars) {
+                const Word first = field<Word>(properties, 0x1c);
+                const Word last = field<Word>(properties, 0x20);
+                if (!first || last < first || last - first < choice.stars * 12) return false;
+                index = int(choice.stars) - 1;
+            }
+            choice.applied = true;
+            native<int>(base, 0x147adc, 4, "AsterSocial", "play day=%u stars=%u", day, choice.stars);
+        } else if (level->stars <= 1 || !level->unlocks[0][0] ||
+                   !socialContentEnabled(base) || starChallengesUnlocked(base, *level)) {
+            return false;
         }
-        selectedChallenge.applied = true;
-        native<int>(base, 0x147adc, 4, "AsterSocial", "play day=%u stars=%u", day, choice.stars);
     }
     field<unsigned char>(board, 0x8a0) = index >= 0;
     field<int>(board, 0x7f0) = index;

@@ -336,12 +336,17 @@ static bool starChallengesUnlocked(Word base, const AdventureRecords::LevelInfo&
     if (!profile) return false;
     char allocator = 0;
     const char* alias = nullptr;
-    native<void>(base, 0x14ed0e1, &alias, level.alias, &allocator);
-    bool cleared = native<bool>(base, 0x708190, profile, &alias);
-    if (earned) *earned = earnedStars(base, profile, &alias, level.stars);
-    releaseString(base, alias);
-    if (cleared || level.alwaysAvailable) return true;
+    const bool useLevelProgress = !level.alwaysAvailable && !level.unlocks[0][0];
+    bool cleared = false;
+    if (earned || useLevelProgress) {
+        native<void>(base, 0x14ed0e1, &alias, level.alias, &allocator);
+        if (earned) *earned = earnedStars(base, profile, &alias, level.stars);
+        if (useLevelProgress) cleared = native<bool>(base, 0x708190, profile, &alias);
+        releaseString(base, alias);
+    }
+    if (level.alwaysAvailable || useLevelProgress) return level.alwaysAvailable || cleared;
 
+    // A world gate uses the reward-claimed state of its unlock level.
     for (const auto& unlock : level.unlocks) {
         if (!unlock[0]) break;
         native<void>(base, 0x14ed0e1, &alias, unlock, &allocator);
@@ -392,7 +397,7 @@ static bool showMenu(Word base) {
     makeText(base, menu.headings[1], U"过关条件");
     const char32_t* goals = AdventureRecords::levelTexts + level.goals[menu.stars];
     if (!menu.unlocked) {
-        goals = level.unlocks[0][0] ? U"完成本关主线，或领取\n本世界的三星罐头"
+        goals = level.unlocks[0][0] ? U"领取本世界的三星罐头\n解锁星级挑战"
                                    : U"完成本关主线解锁星级挑战";
     }
     makeText(base, menu.headings[2], goals);

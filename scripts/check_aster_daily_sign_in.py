@@ -54,6 +54,7 @@ def verify(engine, report, base, pool, plants):
     shown = 0
     awards = []
     draw_calls = []
+    image_keys = []
     checkmark, reward_image = STACK + 0x9000, STACK + 0x9100
     small_font = STACK + 0x9200
     write_word(emu, APP + 0x2c0, small_font)
@@ -154,7 +155,10 @@ def verify(engine, report, base, pool, plants):
             desc = uc.reg_read(UC_ARM_REG_R1)
             image = bytes(uc.mem_read(read_word(uc, desc + 12), 64)).split(b"\0", 1)[0]
             assert image.startswith(b"IMAGE_")
-            write_word(uc, arg + 4, checkmark if image.endswith(b"GET_136X106") else reward_image)
+            is_mark = image.endswith(b"GET_136X106")
+            if not is_mark:
+                image_keys.append(image.decode("ascii"))
+            write_word(uc, arg + 4, checkmark if is_mark else reward_image)
             result = 0
         elif site == 0x1d9bb4:
             result = 0
@@ -305,12 +309,28 @@ def verify(engine, report, base, pool, plants):
 
     def check_tile(entry, slot, *, claimed=False, duplicate=False):
         alias, kind, amount = struct.unpack("<3I", emu.mem_read(entry, 12))
-        expected_alias, expected_kind, expected_amount, _, item = expected_day(slot, duplicate=duplicate)
+        expected_alias, expected_kind, expected_amount, (grant, _), item = expected_day(slot, duplicate=duplicate)
         assert (read_string(emu, alias), kind, amount) == (expected_alias, expected_kind, expected_amount), clock
         current = run(report["symbols"]["asterDailySignCurrentSlot"])
         if current != slot:
             run(report["symbols"]["asterDailySignTile"], base, tile, entry + (current - slot) * 12)
+        image_keys.clear()
         run(report["symbols"]["asterDailySignTile"], base, tile, entry)
+        if kind == 9:
+            award, name = grant
+            prefix = {
+                "plant": "IMAGE_UI_PACKETS_",
+                "plant-piece": "IMAGE_UI_FRAGMENT_PIECES_",
+                "costume": "IMAGE_UI_FRAGMENT_AVATAR_AVATAR_",
+                "costume-piece": "IMAGE_UI_FRAGMENT_AVATAR_AVATAR_",
+                "material": "IMAGE_UI_ACCESSORY_ITEM_",
+            }[award]
+            suffix = "LOTUSHOOTER" if award == "plant" and name == "lotusshower" else name.upper()
+            if award == "material":
+                suffix += "_PIECE"
+            assert image_keys == [prefix + suffix], (item, image_keys)
+        else:
+            assert not image_keys, (item, image_keys)
         write_word(emu, tile + 0xd8, slot - 1)
         write_word(emu, tile + 0x30, 110)
         write_word(emu, tile + 0x34, 120)
@@ -408,6 +428,10 @@ def verify(engine, report, base, pool, plants):
     assert makeup() and awards[-1] == (0xa0, 50)
     assert read_word(emu, OTHER + 0xa0) == 50 and saved_progress() == (3, 3)
     assert not makeup()
+
+    clock = date(2031, 11, 2)
+    owned[OTHER] = {("plant", "threepeater")}
+    check_tile(entry_for(2), 2, duplicate=True)
 
     for year in (2032, 2033):
         for month in range(1, 13):

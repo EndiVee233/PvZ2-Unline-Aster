@@ -301,6 +301,16 @@ static Object rewardImage(Address base, const char* key) {
     return skin.image;
 }
 
+static Object wholePlantImage(Address base, Item plant, const ItemSpec& item) {
+    // Use the artwork layer of the seed packet, without its card frame or sun price.
+    if (plant == Item::Lotusshower) return rewardImage(base, "IMAGE_UI_PACKETS_LOTUSHOOTER");
+    char key[sizeof("IMAGE_UI_PACKETS_") + sizeof(item.alias) - 1] = "IMAGE_UI_PACKETS_";
+    auto* output = key + sizeof("IMAGE_UI_PACKETS_") - 1;
+    for (const char* ch = item.alias; *ch; ++ch) *output++ = *ch - ('a' - 'A');
+    *output = 0;
+    return rewardImage(base, key);
+}
+
 extern "C" void asterDailySignTile(Address base, Object tile, const Reward* reward) {
     const Reward display{reward->alias, reward->type, 0};
     native<void>(base, 0xf6347c, tile, &display, 1);
@@ -310,8 +320,9 @@ extern "C" void asterDailySignTile(Address base, Object tile, const Reward* rewa
     const ItemSpec& item = items[unsigned(day.item)];
     if (reward->type == 9) {
         const bool costume = day.kind == Kind::Costume || day.kind == Kind::CostumeShard;
-        if (const auto image = rewardImage(base, costume ? item.costumeIcon : item.icon))
-            field<Object>(tile, 0xa4) = image;
+        const auto image = day.kind == Kind::Plant ? wholePlantImage(base, day.item, item)
+            : rewardImage(base, costume ? item.costumeIcon : item.icon);
+        if (image) field<Object>(tile, 0xa4) = image;
     }
     if (index + 1 == asterDailySignCurrentSlot())
         claimMark = rewardImage(base, claimMarkKey);

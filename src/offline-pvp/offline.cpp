@@ -224,12 +224,14 @@ static void projectBusinessOwners(U b,P m){
   )continue;
   U64 target=economyRuntime.state.businessOwnedMask&businessBit(s->id)?identity:0;
 #ifdef PVP_SILENT_RAIDS
-  U index=businessBit(s->id)==1?0:1;
-  if(!target)target=economyRuntime.state.shopEnemy[index];
+  U index=businessIndex(s->id);
+  if(!target)target=businessEnemy(economyRuntime.state,index);
   U occupier[40]{},title[40]{};
-  const bool other=economyRuntime.state.shopEnemy[index]!=0;
-  if(other)neighborName(economyRuntime.state.shopEnemySeed[index],economyRuntime.state.shopEnemyKind[index],occupier);
-  businessTitle(*s,title,other?occupier:nullptr,target&&!other);
+  const bool other=businessEnemy(economyRuntime.state,index)!=0;
+  if(other)neighborName(businessEnemySeed(economyRuntime.state,index),businessEnemyKind(economyRuntime.state,index),occupier);
+  P player=target==identity?profile(b):nullptr;
+  const U* name=player?reinterpret_cast<const U*>(at<P>(player,0x58)):nullptr;
+  businessTitle(title,other?occupier:name);
   P old=at<P>(p,16);bool equal=old!=nullptr;
   for(U i=0;i<40&&equal;++i){if(at<U>(old,i*4)!=title[i])equal=false;if(!title[i])break;}
   if(!equal){P text=nullptr;char a=0;call<void>(b,0x14eb451,reinterpret_cast<P>(&text),title,&a);at<P>(p,16)=text;release(b,old,true);}
@@ -241,6 +243,13 @@ static void projectBusinessOwners(U b,P m){
  projectBusinessStocks(b,m);
 #endif
 }
+#ifdef PVP_DISTRICT_SHOPS
+extern "C" U offlineBusinessUsesOwnName(U b,P record){
+ const auto* shop=record?businessId(at<U>(record,0)):nullptr;
+ return shop&&regular(b)&&activeBusiness(*shop)&&at<U>(record,48)==shop->zone&&
+  at<U>(record,52)==shop->position&&at<U64>(record,8)==offlineBusinessIdentity(b)&&at<P>(record,16);
+}
+#endif
 #endif
 #include "progression.h"
 #ifdef PVP_REGIONS
@@ -474,7 +483,7 @@ static void initialBusinessFormation(U b,const BusinessPlot&s,Store&formation){
  // Native PlantType IDs. The plant choices come from the old shop footage;
  // these coordinates are Aster's layouts on its existing arena.
  enum : U {
-  Peashooter=2,WallNut=3,TallNut=4,BonkChoy=5,MelonPult=7,
+  Peashooter=2,WallNut=3,TallNut=4,BonkChoy=5,CabbagePult=6,MelonPult=7,
   Snapdragon=15,Spikeweed=16,SpringBean=20,SnowPea=21,Bloomerang=27,
   Radish=42,HeavenlyPeach=43,BambooShoot=45
  };
@@ -485,7 +494,14 @@ static void initialBusinessFormation(U b,const BusinessPlot&s,Store&formation){
   {Peashooter,3,0},{Snapdragon,3,2},{TallNut,3,4},
   {Peashooter,4,1},{WallNut,4,4}
  };
- // The western coffee-house footage supplies a second mix for Aster's STORE.
+ static constexpr Pos coffee[]={
+  {Peashooter,0,1},{CabbagePult,0,2},{WallNut,0,5},
+  {Bloomerang,1,1},{BonkChoy,1,3},{WallNut,1,5},
+  {Peashooter,2,0},{CabbagePult,2,2},{TallNut,2,4},
+  {Bloomerang,3,1},{BonkChoy,3,3},{WallNut,3,5},
+  {Peashooter,4,1},{CabbagePult,4,2},{WallNut,4,5}
+ };
+ // The western footage supplies the mix for the STORE.
  static constexpr Pos store[]={
   {HeavenlyPeach,0,1},{Bloomerang,0,2},{Peashooter,0,3},{Radish,0,5},
   {SnowPea,1,0},{BambooShoot,1,3},{BonkChoy,1,4},{Radish,1,5},
@@ -493,11 +509,11 @@ static void initialBusinessFormation(U b,const BusinessPlot&s,Store&formation){
   {SnowPea,3,0},{BambooShoot,3,3},{BonkChoy,3,4},{Radish,3,5},
   {MelonPult,4,0},{HeavenlyPeach,4,1},{Bloomerang,4,2},{Radish,4,5}
  };
- const bool hot=s.kind==BusinessKind::HotDog;
- const Pos* positions=hot?hotDog:store;
+ const Pos* positions=s.kind==BusinessKind::HotDog?hotDog:s.kind==BusinessKind::Coffee?coffee:store;
  formation=Store{};
  formation.user=owner(b);
- formation.positions=hot?sizeof(hotDog)/sizeof(Pos):sizeof(store)/sizeof(Pos);
+ formation.positions=s.kind==BusinessKind::HotDog?sizeof(hotDog)/sizeof(Pos):
+                     s.kind==BusinessKind::Coffee?sizeof(coffee)/sizeof(Pos):sizeof(store)/sizeof(Pos);
  for(U i=0;i<formation.positions;++i){
   const Pos& pos=positions[i];
   formation.pos[i]=pos;
@@ -1211,11 +1227,11 @@ static bool persistBattleArmy(U b,P m,bool daveVictory=false,U stars=0){
   if(stars==3){
 #ifdef PVP_BUSINESS_PRODUCTION
    U bit=businessBit(arenaNpc);
-   if(!(next.businessOwnedMask&bit))next.businessStocks[bit==1?0:1].producedAt=realNow(b);
+   if(!(next.businessOwnedMask&bit))businessStock(next,businessIndex(arenaNpc)).producedAt=realNow(b);
 #endif
 #ifdef PVP_SILENT_RAIDS
-   U i=businessBit(arenaNpc)==1?0:1;next.shopRaidAt[i]=realNow(b);
-   next.shopEnemy[i]=next.shopEnemySeed[i]=next.shopEnemyKind[i]=0;
+   U i=businessIndex(arenaNpc);businessRaidAt(next,i)=realNow(b);
+   businessEnemy(next,i)=businessEnemySeed(next,i)=businessEnemyKind(next,i)=0;
 #endif
    next.businessOwnedMask|=businessBit(arenaNpc);
   }

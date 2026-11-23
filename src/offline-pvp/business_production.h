@@ -2,9 +2,9 @@
 extern "C" U offlineBusinessProductionMode(){return 1;}
 static bool produceBusinesses(Economy& next,U now){
  bool changed=false;
- for(U i=0;i<2;++i){
+ for(U i=0;i<BUSINESS_COUNT;++i){
   if(!(next.businessOwnedMask&(1u<<i)))continue;
-  auto& stock=next.businessStocks[i];
+  auto& stock=businessStock(next,i);
   // Old v10 ownership has no acquisition time: begin empty now, never award
   // guessed rent for the period before this feature was installed.
   if(!stock.producedAt){stock.producedAt=now;changed=true;continue;}
@@ -25,13 +25,13 @@ static void projectBusinessStocks(U b,P m){
  if(!begin||end<begin||U(end-begin)>64*256||U(end-begin)%64)return;
  for(P p=begin;p<end;p+=64){const BusinessPlot* plot=businessId(at<U>(p,0));
   if(!plot||at<U>(p,48)!=plot->zone||at<U>(p,52)!=plot->position)continue;
-  U index=businessBit(plot->id)==1?0:1;bool owned=r.state.businessOwnedMask&(1u<<index);
+  U index=businessIndex(plot->id);bool owned=r.state.businessOwnedMask&(1u<<index);
   U64 expected=owned?U64(identity):0;
 #ifdef PVP_SILENT_RAIDS
-  if(!owned)expected=r.state.shopEnemy[index];
+  if(!owned)expected=businessEnemy(r.state,index);
 #endif
   if(at<U64>(p,8)!=expected)continue;
-  const auto& stock=r.state.businessStocks[index];
+  const auto& stock=businessStock(r.state,index);
   const auto& rules=plot->rules;
   // An occupier retains any stock left in a captured shop. Offline rent only
   // accrues while the current player owns it.

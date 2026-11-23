@@ -1,4 +1,4 @@
-"""Prepare separate Arena definitions with the stock Pirate and West stages."""
+"""Prepare separate Arena definitions with the three original shop terrains."""
 from copy import deepcopy
 from io import StringIO
 import json
@@ -10,7 +10,7 @@ from build_aster_legacy_endless_gameplay import package_data
 
 
 PLANKS = "RTID(PiratePlanks@CurrentLevel)"
-STAGES = {"pirate": "PirateStage", "west": "WestStage"}
+STAGES = {"egypt": "EgyptStage", "pirate": "PirateStage", "west": "WestStage"}
 ARENAS = {"battle": "arena_battle_test", "defense": "arena_plant_test"}
 
 
@@ -20,9 +20,8 @@ def level_definition(document):
 
 
 def shop_definitions(bundle):
-    pirate = decode(extract(bundle, "\\PIRATE1.RTON"))
+    pirate = decode(extract(bundle, "\\ARENA_OCCUPY_2.RTON"))
     planks, = (item for item in pirate["objects"] if item["objclass"] == "PiratePlankProperties")
-    planks["objdata"]["PlankRows"] = [0, 2, 4]
     for mode, arena in ARENAS.items():
         stock = decode(extract(bundle, f"\\{arena.upper()}.RTON"))
         for world, stage in STAGES.items():

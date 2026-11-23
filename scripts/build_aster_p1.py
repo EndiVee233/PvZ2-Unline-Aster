@@ -14,30 +14,17 @@ from build_aster_pickup_access import ENGINE
 from build_aster_pvp_feedback import pack_apk
 from build_aster_hud_pickup import ASSET, BOOTSTRAP, PLAN, create_plan, rebuild_dynamic_bootstrap
 from build_aster_save_path_fix import manifest_version
-from prepare_aster_pvp_feedback import NEW_STATE, ROOT, compile_payload, file_offset
+from prepare_aster_pvp_feedback import ROOT, compile_payload, file_offset
 from prepare_aster_shop_terrain import prepare_shop_terrain
 from prepare_profile_memory import branch
 
 
 A305 = "989dce8f9b66ef280c799e6de26375ce6ae26411e8178aa116bea2de3b8872df"
-PVP_NAMES = (
-    "offlineGarden", "offlineMapArmyPrepare", "offlineDaveNarrativeAck", "offlineDaveLabel", "offlineAttack", "offlineInfo",
-    "offlineBattleResult", "offlineBusinessAction", "offlineBusinessChest", "offlineScoutRewards",
-    "offlineAttackPreviewFormat", "offlineAttackPreviewCost", "offlineHistoryLookup",
-    "offlinePresetLevelDefinition", "offlineSave",
-    "_ZL21projectBusinessOwnersjPh", "_ZL21projectBusinessStocksjPh",
-)
+STATIC_PVP_ENTRIES = {"_ZL13projectGardenjPh", "_ZL21projectBusinessOwnersjPh", "_ZL21projectBusinessStocksjPh"}
 
 
 def symbols(elf):
     return {s.name: s for s in elf.get_section_by_name(".symtab").iter_symbols() if s.name}
-
-
-def runtime_layout(elf, entries):
-    section = elf.get_section_by_name(".runtime")
-    start = section["sh_addr"]
-    return {name: (s["st_value"], s["st_size"]) for name, s in entries.items()
-            if s["st_info"]["type"] == "STT_OBJECT" and start <= s["st_value"] < start + section["sh_size"]}
 
 
 def patch_native(native, sdk, headers, prior, p0, output):
@@ -49,19 +36,15 @@ def patch_native(native, sdk, headers, prior, p0, output):
     if (rx["p_flags"], rw["p_flags"]) != (5, 6):
         raise ValueError("Unexpected guest segment flags")
     start = (rx["p_vaddr"] + rx["p_filesz"] + 15) & ~15
-    patched_elf = compile_payload(sdk, ROOT / "src", headers, output, start, NEW_STATE, archived=False)
+    alignment = rw["p_align"]
+    runtime_address = (rw["p_vaddr"] + rw["p_memsz"] + alignment - 1) & -alignment
+    patched_elf = compile_payload(sdk, ROOT / "src", headers, output, start, runtime_address,
+                                  archived=False, extra_flags=("-DPVP_DISTRICT_SHOPS",))
     guest = ELFFile(BytesIO(patched_elf.read_bytes()))
     before = ELFFile(BytesIO(prior.read_bytes()))
     p0_elf = ELFFile(BytesIO(p0.read_bytes()))
     previous, p0_entries, current = map(symbols, (before, p0_elf, guest))
-    # Verify the installed A194 runtime. A303 appended a map projection,
-    # whose entry is redirected below as well.
-    if runtime_layout(before, previous) != runtime_layout(guest, current):
-        raise ValueError("P1 must preserve the installed PvP runtime layout")
     runtime = guest.get_section_by_name(".runtime").data()
-    runtime_offset = file_offset(elf, NEW_STATE, len(runtime))
-    if native[runtime_offset:runtime_offset + len(runtime)] != runtime:
-        raise ValueError("P1 must preserve the installed PvP runtime initial values")
 
     body = guest.get_section_by_name(".payload")
     payload = bytearray(bytes(body["sh_addr"] - start) + body.data())
@@ -77,14 +60,15 @@ def patch_native(native, sdk, headers, prior, p0, output):
             raise ValueError(f"Unexpected A305 instruction at {site:#x}")
         replacements[offset] = branch(site, target)
 
-    for name in PVP_NAMES:
-        if name not in previous:
-            raise ValueError(f"Missing installed PvP entry {name}")
-        for entries in (previous, p0_entries):
-            if name in entries:
-                redirect(entries[name]["st_value"], address(name))
-    garden = "_ZL13projectGardenjPh"
-    redirect(p0_entries[garden]["st_value"], address(garden))
+    # All previously installed entries must share the expanded wallet/runtime.
+    # Older aliases that do not touch state can keep their original code.
+    for entries in (previous, p0_entries):
+        for name, entry in entries.items():
+            info = entry["st_info"]
+            exported = (info["type"] == "STT_FUNC" and info["bind"] == "STB_GLOBAL"
+                        and not name.startswith("__aeabi_"))
+            if name in STATIC_PVP_ENTRIES or exported and name in current:
+                redirect(entry["st_value"], address(name))
 
     def stub(source, *, base=False):
         payload.extend(bytes(-len(payload) % 4))
@@ -131,10 +115,23 @@ def patch_native(native, sdk, headers, prior, p0, output):
         bl #{address('offlineLabCardDraw')}
         pop {{r4,pc}}
     """, base=True), 0xe92d4ff0)
+    # The stock low-stock label normally replaces the record name with
+    # “您的资产”. Retain the original blue label and chest behavior.
+    redirect(0x10134d4, stub(f"""
+        push {{r0-r4,lr}}
+        mov r1,r10
+        {base}
+        bl #{address('offlineBusinessUsesOwnName')}
+        cmp r0,#0
+        pop {{r0-r4,lr}}
+        bne #0x1011b10
+        ldr r1,original
+        b #0x10134d8
+        original: .word {struct.unpack_from("<I", native, 0x1013730)[0]}
+    """, base=True), 0xe59f1254)
 
     old_rw = rw["p_offset"]
     new_end = rx["p_offset"] + start - rx["p_vaddr"] + len(payload)
-    alignment = rw["p_align"]
     growth = (max(0, new_end - old_rw) + alignment - 1) & -alignment
     if start + len(payload) >= rw["p_vaddr"] or any(native[rx["p_offset"] + rx["p_filesz"]:old_rw]):
         raise ValueError("PvP payload exceeds the A305 code range")
@@ -146,6 +143,13 @@ def patch_native(native, sdk, headers, prior, p0, output):
     length = new_end - rx["p_offset"]
     struct.pack_into("<II", result, ph + rx_index * size + 16, length, length)
     struct.pack_into("<I", result, ph + rw_index * size + 4, old_rw + growth)
+    runtime_offset = old_rw + growth + runtime_address - rw["p_vaddr"]
+    if runtime_offset < len(result):
+        raise ValueError("Expanded PvP runtime would overwrite guest metadata")
+    result.extend(bytes(runtime_offset - len(result)))
+    result.extend(runtime)
+    length = len(result) - old_rw - growth
+    struct.pack_into("<II", result, ph + rw_index * size + 16, length, length)
     sh = elf["e_shoff"] + (growth if elf["e_shoff"] >= old_rw else 0)
     struct.pack_into("<I", result, 32, sh)
     for idx, section in enumerate(elf.iter_sections()):

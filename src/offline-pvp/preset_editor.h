@@ -93,8 +93,10 @@ extern "C" P offlinePresetLevelDefinition(U b,P out,P registry,P name){
    if(shop){
     bool battle=arenaUser==owner(b)&&arenaNpc==id&&sameText(level,"arena_battle_test");
     bool defense=sameText(level,PRESET_BOARD_NAME)&&shopDefenseSession(b,id);
-    if(battle)alias=shop->kind==BusinessKind::HotDog?"arena_shop_pirate_battle":"arena_shop_west_battle";
-    if(defense)alias=shop->kind==BusinessKind::HotDog?"arena_shop_pirate_defense":"arena_shop_west_defense";
+    if(battle)alias=shop->kind==BusinessKind::Coffee?"arena_shop_egypt_battle":
+                     shop->kind==BusinessKind::HotDog?"arena_shop_pirate_battle":"arena_shop_west_battle";
+    if(defense)alias=shop->kind==BusinessKind::Coffee?"arena_shop_egypt_defense":
+                      shop->kind==BusinessKind::HotDog?"arena_shop_pirate_defense":"arena_shop_west_defense";
    }
   }
  }

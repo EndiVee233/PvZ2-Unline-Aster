@@ -25,6 +25,7 @@ def f32(number):
 def check(folder):
     sys.meta_path.insert(0, Definitions())
     import check_offline_pvp_arm as core
+    from check_offline_pvp_v48_arm import SessionEngine
     from check_offline_pvp_v60_arm import board, result, return_map
     from check_offline_pvp_v81_arm import GarrisonEngine
     from check_offline_pvp_v93_focused import crc, key
@@ -49,6 +50,8 @@ def check(folder):
 
         def hook(self, emu, address, size, data):
             off = address - base
+            if address == end + 0x300:
+                return SessionEngine.hook(self, emu, address, size, data)
             r0, r1 = [emu.reg_read(r) for r in (UC_ARM_REG_R0, UC_ARM_REG_R1)]
             value = 0
             if off == 0x147854:
@@ -206,7 +209,6 @@ def check(folder):
     lab.put(core.PM + 0x74, 43)
     assert lab.entry_timer() == HIDDEN
 
-    from check_offline_pvp_v48_arm import SessionEngine
     research = Fixture()
     research.enter()
     research.put(research.state() + 12, 10000)
@@ -227,12 +229,18 @@ def check(folder):
     seed.enter()
     record = bytearray(seed.files[key(seed)])
     struct.pack_into("<I", record, 460, 7)
+    district_shops = "offlineBusinessUsesOwnName" in seed.exports
+    if district_shops:
+        struct.pack_into("<I", record, 2936, 0x0f)
     for stars in (1, 2, 3):
         shop = Fixture()
         shop.files = {key(seed): crc(bytearray(record))}
         shop.enter()
         shop.run("offlineGarden")
-        assert [shop.title(p) for p in shop.shops()] == ["热狗店 · 空置的小屋", "商店 · 空置的小屋"]
+        expected_titles = ["空置的小屋"] * 4 if district_shops else ["热狗店 · 空置的小屋", "商店 · 空置的小屋"]
+        assert [shop.title(p) for p in shop.shops()] == expected_titles
+        if district_shops:
+            shop.string(core.PROFILE + 0x58, "WSA fixture", True)
         assert [shop.get(shop.shops()[0] + i) for i in (24, 28, 32, 36, 40, 44)] == [0, 2000, 0, 2000, 0, 0]
         shop.fixed_clock = False
         for _ in range(3):
@@ -260,7 +268,10 @@ def check(folder):
         return_map(shop)
         shop.reset_map()
         if stars == 3:
-            assert shop.title(shop.shops()[0]) == "热狗店 · 自己"
+            assert shop.title(shop.shops()[0]) == ("WSA fixture" if district_shops else "热狗店 · 自己")
+            if district_shops:
+                shop.run("offlineBusinessUsesOwnName", shop.shops()[0])
+                assert shop.u.reg_read(UC_ARM_REG_R0) == 1
             shop.advance(180)
             shop.run("offlineTrainingTick", shop.get(manager + 0x20))
             own = shop.shops()[0]

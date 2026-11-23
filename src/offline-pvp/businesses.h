@@ -1,6 +1,6 @@
 // First restore independent business map records and their native detail panel.
 // Ownership, garrisons and rent are deliberately separate from residential raids.
-enum class BusinessKind { HotDog, Store };
+enum class BusinessKind { Coffee, HotDog, Store };
 struct BusinessRules {
  U attackFee,coinCapacity,medalCapacity,coinRate,medalRate;
  U threeStarCoins;
@@ -9,21 +9,47 @@ struct BusinessRules {
 struct BusinessPlot {U id,zone,position;BusinessKind kind;BusinessRules rules;};
 // Keep the native Arena level name. The board loader selects each shop's
 // stage definition while preserving Arena UI, input and settlement.
-static const BusinessPlot BUSINESSES[]={
- {0x71000001,3,2,BusinessKind::HotDog,{1,2000,2000,40,20,300,"arena_battle_test"}},
- {0x71000002,3,3,BusinessKind::Store,{1,2000,2000,40,20,300,"arena_battle_test"}}
+static constexpr BusinessRules SHOP_RULES={1,2000,2000,40,20,300,"arena_battle_test"};
+// The native street renderer uses ((zone-2)*3+position+4)%3 for shop
+// art: 2 is Coffee, 0 is Hot Dog and 1 is STORE. Match the boards to it.
+static constexpr BusinessPlot BUSINESSES[]={
+ {0x71000001,3,2,BusinessKind::HotDog,SHOP_RULES},
+ {0x71000002,3,3,BusinessKind::Store,SHOP_RULES},
+#ifdef PVP_DISTRICT_SHOPS
+ {0x71000003,2,1,BusinessKind::Coffee,SHOP_RULES},
+ {0x71000004,2,2,BusinessKind::HotDog,SHOP_RULES},
+ {0x71000005,2,3,BusinessKind::Store,SHOP_RULES},
+ {0x71000006,3,1,BusinessKind::Coffee,SHOP_RULES},
+ {0x71000007,4,1,BusinessKind::Coffee,SHOP_RULES},
+ {0x71000008,4,2,BusinessKind::HotDog,SHOP_RULES},
+ {0x71000009,4,3,BusinessKind::Store,SHOP_RULES},
+ {0x7100000a,5,1,BusinessKind::Coffee,SHOP_RULES},
+ {0x7100000b,5,2,BusinessKind::HotDog,SHOP_RULES},
+ {0x7100000c,5,3,BusinessKind::Store,SHOP_RULES},
+ {0x7100000d,6,1,BusinessKind::Coffee,SHOP_RULES},
+ {0x7100000e,6,2,BusinessKind::HotDog,SHOP_RULES},
+ {0x7100000f,6,3,BusinessKind::Store,SHOP_RULES},
+#endif
 };
+static constexpr U BUSINESS_COUNT=sizeof(BUSINESSES)/sizeof(BUSINESSES[0]);
+static U businessIndex(U id){return id-0x71000001u;}
+#ifdef PVP_DISTRICT_SHOPS
+static bool activeBusiness(const BusinessPlot& plot);
+#endif
 static const char32_t* businessName(const BusinessPlot& plot){
- return plot.kind==BusinessKind::HotDog?U"热狗店":U"商店";
+ return plot.kind==BusinessKind::Coffee?U"咖啡店":plot.kind==BusinessKind::HotDog?U"热狗店":U"商店";
 }
 static bool businessLand(const BusinessPlot& plot,U row,U col){
  return plot.kind!=BusinessKind::HotDog||col<5||(row!=1&&row!=3);
 }
-static void businessTitle(const BusinessPlot& plot,U* title,const U* occupier,bool own){
- U count=0;for(auto p=businessName(plot);*p;++p)title[count++]=*p;
- title[count++]=' ';title[count++]=0xb7;title[count++]=' ';
- if(occupier){for(U i=0;occupier[i]&&count<39;++i)title[count++]=occupier[i];}
- else for(auto p=own?U"自己":U"空置的小屋";*p;++p)title[count++]=*p;
+static void businessTitle(U* title,const U* occupier){
+ if(!occupier){
+  const char32_t vacant[]=U"空置的小屋";
+  for(U i=0;i<sizeof(vacant)/sizeof(*vacant);++i)title[i]=vacant[i];
+  return;
+ }
+ U count=0;
+ while(count<39&&occupier[count]){title[count]=occupier[count];++count;}
  title[count]=0;
 }
 #ifdef PVP_BUSINESS_REPLACE
@@ -42,21 +68,20 @@ extern "C" U offlineBusinessIdentity(U b){
 }
 #endif
 static const BusinessPlot* businessPlot(U zone,U position){
- for(U i=0;i<sizeof(BUSINESSES)/sizeof(BUSINESSES[0]);++i)
+ for(U i=0;i<BUSINESS_COUNT;++i)
   if(BUSINESSES[i].zone==zone&&BUSINESSES[i].position==position)return BUSINESSES+i;
  return nullptr;
 }
 #ifdef PVP_BUSINESS_SCOUT
 extern "C" U offlineBusinessScoutMode(){return 1;}
 static const BusinessPlot* businessId(U id){
- for(U i=0;i<sizeof(BUSINESSES)/sizeof(BUSINESSES[0]);++i)if(BUSINESSES[i].id==id)return BUSINESSES+i;
- return nullptr;
+ U index=businessIndex(id);return index<BUSINESS_COUNT?BUSINESSES+index:nullptr;
 }
 static bool scoutBusiness(U b,const BusinessPlot&s,bool attack=false);
 #endif
 #ifdef PVP_BUSINESS_BATTLE
 extern "C" U offlineBusinessBattleMode(){return 1;}
-static U businessBit(U id){for(U i=0;i<2;++i)if(BUSINESSES[i].id==id)return 1u<<i;return 0;}
+static U businessBit(U id){U index=businessIndex(id);return index<BUSINESS_COUNT?1u<<index:0;}
 static void projectBusinessOwners(U b,P m);
 static bool attackBusiness(U b,const BusinessPlot&s);
 #endif
@@ -69,8 +94,11 @@ static bool collectBusiness(U b,const BusinessPlot&s);
 #endif
 static void projectBusinesses(U b,P m){
  if(!regular(b))return;
- for(U i=0;i<sizeof(BUSINESSES)/sizeof(BUSINESSES[0]);++i){
+ for(U i=0;i<BUSINESS_COUNT;++i){
   const BusinessPlot&s=BUSINESSES[i];bool occupied=false;
+#ifdef PVP_DISTRICT_SHOPS
+  if(!activeBusiness(s))continue;
+#endif
 #ifdef PVP_REGIONS
   if(!regionOpen(s.zone))continue;
 #endif
@@ -86,7 +114,7 @@ static void projectBusinesses(U b,P m){
   // Local unoccupied fixtures: no accrued funds or production before capture.
   // Capacity is a provisional local value, not a recovered server economy.
   alignas(8) U record[16]={s.id,0,0,0,0,1,0,s.rules.medalCapacity,0,s.rules.coinCapacity,0,0,s.zone,s.position,1,0};
-  U title[40]{};businessTitle(s,title,nullptr,false);
+  U title[40]{};businessTitle(title,nullptr);
   char alloc=0;call<void>(b,0x14eb451,reinterpret_cast<P>(record)+16,title,&alloc);
   call<void>(b,0x1046a04,m,record);release(b,reinterpret_cast<P>(record[4]),true);
   log(b,"business-map-added",s.zone,s.position);

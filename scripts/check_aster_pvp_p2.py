@@ -17,8 +17,9 @@ BASES = (
     (19, (1000, 38), (890000, 5600), (690000, 383380), "pvp_football_mech", 900),
 )
 NPC = 0x70000002
-SHOP_IDS = (0x71000001, 0x71000002)
-SHOP_LINEUPS = ((13, {2, 3, 4, 15, 16, 20, 21}), (21, {2, 5, 7, 21, 27, 42, 43, 45}))
+SHOP_IDS = (0x71000001, 0x71000002, 0x71000003)
+SHOP_LINEUPS = ((13, {2, 3, 4, 15, 16, 20, 21}), (21, {2, 5, 7, 21, 27, 42, 43, 45}),
+                (15, {2, 3, 4, 5, 6, 27}))
 WALLET_LIMIT = 2_000_000_000
 
 
@@ -135,13 +136,13 @@ def check_shop_storage(make_engine, claim_shop, manager):
         engine.train()
     engine.advance(91)
     engine.run("offlineTrainingTick", engine.get(manager + 0x20))
-    for i in range(len(SHOP_IDS)):
+    for i in range(2):
         claim_shop(engine, i)
     assert engine.owned() == 3
     # Keep this fixture on the normal progression ticking path.
     engine.advance_without_raids(100 * 3600)
     engine.enter()
-    for shop in engine.shops():
+    for shop in engine.shops()[:2]:
         assert [engine.get(shop + offset) for offset in (24, 28, 32, 36)] == [2000]*4
     assert (engine.balance(), engine.medals()) == (WALLET_LIMIT, WALLET_LIMIT)
     first = engine.shops()[0]
@@ -161,7 +162,9 @@ def check_shop_formations(make_engine, battle, claim_shop, manager):
 
     for index, (count, plant_types) in enumerate(SHOP_LINEUPS):
         engine = make_engine(10, 1000, shops=True)
-        world = ("pirate", "west")[index]
+        if index == 2 and "offlineBusinessUsesOwnName" not in engine.exports:
+            continue
+        world = ("pirate", "west", "egypt")[index]
         battle_name, defense_name = "arena_battle_test", "arena_plant_test"
         assert engine.resolve_definition(battle_name) == (battle_name,)
         engine.run("offlineGarden")
@@ -333,8 +336,11 @@ def check(folder):
         def advance_without_raids(self, seconds):
             self.advance(seconds)
             # Isolate storage and collection from the separate daily raid clock.
-            for offset in (796, 800, 804):
-                self.set_field(offset, self.now)
+            self.set_field(796, self.now)
+            for index in range(15):
+                if self.owned() & (1 << index):
+                    offset = 800 + 4 * index if index < 2 else 3200 + 16 * (index - 2)
+                    self.set_field(offset, self.now)
 
         def call_symbol(self, name, *args):
             callers = [address for symbol, address in self.exports.items() if name in symbol]
@@ -363,6 +369,8 @@ def check(folder):
             engine.set_field(offset, value)
         if shops:
             engine.set_field(460, 7)
+            if "offlineBusinessUsesOwnName" in engine.exports:
+                engine.set_field(2936, 0x0f)  # Both legacy lots plus Coffee and Hot Dog in zone 2.
         engine.run("_ZL11saveEconomyjR7Economy", engine.state())
         assert engine.u.reg_read(UC_ARM_REG_R0) == 1 and engine.files[key(engine)]
         engine.run("_ZL12applyEconomyjPh", manager)
@@ -374,7 +382,7 @@ def check(folder):
     check_shop_formations(make_engine, battle, garrison.claim, manager)
     check_matching(make_engine)
     print("P2 ARM passed: bases 1/10/19, training, upgrades, storage, 0-3 stars and retreat, "
-          "both shop formations and saved moves, matching at 499/500/501 and high cups, special import.")
+          "shop formations and saved moves, matching at 499/500/501 and high cups, special import.")
 
 
 if __name__ == "__main__":

@@ -23,12 +23,17 @@ def check(folder):
         def __init__(self):
             super().__init__()
             self.redraws = []
+            self.models = []
             self.reward_text = None
 
         def hook(self, emu, address, size, data):
             offset = address - base
             if offset == 0x100a864:
                 self.redraws.append([self.get(shop) for shop in self.shops()])
+            if offset == 0x100a5ac:
+                self.models.append([self.get(p) for p in self.shops()])
+                emu.reg_write(UC_ARM_REG_PC, emu.reg_read(UC_ARM_REG_LR))
+                return
             if offset == 0x109a1c0:
                 emu.reg_write(UC_ARM_REG_PC, core.END)
                 return
@@ -49,6 +54,10 @@ def check(folder):
                 self.put(panel + offset, value)
             return panel
 
+        def shop_name(self, record):
+            address = self.get(record + 16)
+            return bytes(self.u.mem_read(address, 4 * self.get(address - 12))).decode("utf-32-le")
+
     initial = Fixture()
     initial.enter()
     raw = bytearray(initial.files[key(initial)])
@@ -58,23 +67,73 @@ def check(folder):
     game.files = {key(initial): crc(raw)}
     game.enter()
     game.run("offlineGarden")
+    district_shops = "offlineBusinessUsesOwnName" in game.exports
+    assert not game.shops()
+    if district_shops:
+        game.put(map_control + 0xa8, manager + 0x19000)
     area2 = game.region_panel(2, 10000)
     game.stub(0x100b3d8, area2, 202)
-    assert game.get(manager + 4) == 16500 and game.redraws[-1] == []
+    assert game.get(manager + 4) == 16500
+    second = game.redraws[-1]
+    assert len(second) == (2 if district_shops else 0)
+    if district_shops:
+        assert game.models[-1] == second
+        assert len({game.get(p + 52) for p in game.shops()}) == 2
+        assert {game.get(p + 48) for p in game.shops()} == {2}
+        assert all(game.shop_name(p) == "空置的小屋" for p in game.shops())
     area3 = game.region_panel(3, 16500)
     game.run("offlineBusinessAction", area3, 203)
-    assert game.get(manager + 4) == 16500 and not game.shops()
+    assert game.get(manager + 4) == 16500
+    assert [game.get(p) for p in game.shops()] == second
     game.failwrite = True
     game.stub(0x100b3d8, area3, 202)
-    assert game.get(manager + 4) == 16500 and not game.shops()
+    assert game.get(manager + 4) == 16500
+    assert [game.get(p) for p in game.shops()] == second
     game.failwrite = False
     game.stub(0x100b3d8, area3, 202)
-    assert game.redraws[-1] == [0x71000001, 0x71000002]
+    third = game.redraws[-1]
     assert game.get(manager + 4) == 0
+    if district_shops:
+        assert game.models[-1] == third and set(second) <= set(third)
+        assert len(third) - len(second) in range(3)
+    else:
+        assert third == [0x71000001, 0x71000002]
     game.stub(0x100b3d8, area3, 202)
-    assert game.get(manager + 4) == 0 and game.redraws[-1] == [0x71000001, 0x71000002]
+    assert game.get(manager + 4) == 0 and game.redraws[-1] == third
+    if district_shops:
+        restarted = Fixture()
+        restarted.copy_state(game)
+        restarted.enter()
+        restarted.run("offlineGarden")
+        assert sorted(restarted.get(p) for p in restarted.shops()) == sorted(third)
+        # Reuse the actual ARM allocator with fresh profile IDs.
+        layouts = set()
+        totals = {zone: set() for zone in range(2, 7)}
+        plots = (0b11100, 0b100011, 0b111000000, 0b111000000000, 0b111000000000000)
+        layout = game.alloc(len(raw))
+        initializer = game.exports["_ZL23initializeDistrictShopsR7Economy"]
+        for user_id in range(100, 132):
+            game.put(layout + 8, user_id)
+            game.run(initializer, layout)
+            mask = game.get(layout + 2936)
+            layouts.add(mask)
+            for zone, plot_mask in enumerate(plots, 2):
+                totals[zone].add((mask & plot_mask).bit_count())
+        assert len(layouts) > 16 and totals[2] == {2}
+        assert all(totals[zone] == {0, 1, 2} for zone in range(3, 7))
+
+        # Migrate a v18 wallet containing the two original occupied shops.
+        legacy = bytearray(raw[:2936])
+        for offset, value in ((4, 18), (412, 3), (460, 7)):
+            struct.pack_into("<I", legacy, offset, value)
+        migrated = Fixture()
+        migrated.files = {key(initial): crc(legacy)}
+        migrated.enter()
+        migrated.run("offlineGarden")
+        assert migrated.owned() == 3 and migrated.get(manager + 4) == 26500
+        assert {0x71000001, 0x71000002} <= {migrated.get(p) for p in migrated.shops()}
     shop = game.shops()[0]
-    assert game.click(shop) == (3, 3, 2)
+    assert game.click(shop) == (3, game.get(shop + 48), game.get(shop + 52))
     game.scout_shop(0)
     assert len(game.loads) == 1 and game.get(manager + 4) == 0
     game.put(core.PM + 0x74, 43)

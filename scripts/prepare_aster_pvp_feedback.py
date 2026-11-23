@@ -103,7 +103,7 @@ def generate_headers(apk, engine, resource, catalogue, baseline, output):
     return generated, current, plants
 
 
-def compile_payload(sdk, source, headers, output, address, runtime, *, archived):
+def compile_payload(sdk, source, headers, output, address, runtime, *, archived, extra_flags=()):
     output.mkdir(exist_ok=True)
     compiler = sdk / 'ndk/27.0.12077973/toolchains/llvm/prebuilt/windows-x86_64/bin/clang++.exe'
     flags = re.findall(r"-D[A-Z_]+", (ROOT / 'scripts/build_pvp_v39.py').read_text(encoding='utf8')
@@ -112,7 +112,7 @@ def compile_payload(sdk, source, headers, output, address, runtime, *, archived)
     common = [compiler, '--target=armv7a-linux-androideabi21', '-marm', '-Os', '-fPIC',
               '-ffreestanding', '-fno-builtin', '-fno-stack-protector', '-fno-exceptions',
               '-fno-rtti', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables',
-              '-I' + str(headers), *flags]
+              '-I' + str(headers), *flags, *extra_flags]
     inputs = ['offline-pvp/offline.cpp']
     if archived:
         inputs += ['profile-memory/selection.cpp', 'desktop-input/shortcuts.cpp',

@@ -59,7 +59,47 @@ struct Economy {U magic,version,user,coins,home,sequence,checksum,reserved;Local
 #ifdef PVP_WEEKLY_RULES
  U neighborAttackDay,neighborAttacks,daveRefreshDay,daveTarget,daveActive,daveReplacement;
 #endif
+#ifdef PVP_DISTRICT_SHOPS
+ struct ShopRaid {U at,enemy,seed,kind;};
+ U shopPlots;
+ BusinessStock additionalBusinessStocks[BUSINESS_COUNT-2];
+ ShopRaid additionalBusinessRaids[BUSINESS_COUNT-2];
+#endif
 };
+#ifdef PVP_BUSINESS_PRODUCTION
+template<class State> static auto& businessStock(State& s,U i){
+#ifdef PVP_DISTRICT_SHOPS
+ if(i>=2)return s.additionalBusinessStocks[i-2];
+#endif
+ return s.businessStocks[i];
+}
+#endif
+#ifdef PVP_SILENT_RAIDS
+template<class State> static auto& businessRaidAt(State& s,U i){
+#ifdef PVP_DISTRICT_SHOPS
+ if(i>=2)return s.additionalBusinessRaids[i-2].at;
+#endif
+ return s.shopRaidAt[i];
+}
+template<class State> static auto& businessEnemy(State& s,U i){
+#ifdef PVP_DISTRICT_SHOPS
+ if(i>=2)return s.additionalBusinessRaids[i-2].enemy;
+#endif
+ return s.shopEnemy[i];
+}
+template<class State> static auto& businessEnemySeed(State& s,U i){
+#ifdef PVP_DISTRICT_SHOPS
+ if(i>=2)return s.additionalBusinessRaids[i-2].seed;
+#endif
+ return s.shopEnemySeed[i];
+}
+template<class State> static auto& businessEnemyKind(State& s,U i){
+#ifdef PVP_DISTRICT_SHOPS
+ if(i>=2)return s.additionalBusinessRaids[i-2].kind;
+#endif
+ return s.shopEnemyKind[i];
+}
+#endif
 static constexpr U LEGACY_ECONOMY_SIZE=32+12*TRAIN_COUNT;
 static constexpr U V2_ECONOMY_SIZE=LEGACY_ECONOMY_SIZE+44;
 static constexpr U V3_ECONOMY_SIZE=V2_ECONOMY_SIZE+24;
@@ -84,7 +124,58 @@ static EconomyRuntime economyRuntime;
 static bool same(const char*a,const char*b){while(*a&&*a==*b){++a;++b;}return *a==*b;}
 static constexpr U V16_ECONOMY_SIZE=2840;
 static constexpr U V17_ECONOMY_SIZE=V16_ECONOMY_SIZE+4+4*NPC_COUNT;
-static U checkEconomy(const Economy&s){const unsigned char*p=reinterpret_cast<const unsigned char*>(&s);U h=2166136261u;for(U i=0;i<(s.version==1?LEGACY_ECONOMY_SIZE:s.version==2?V2_ECONOMY_SIZE:s.version==3?V3_ECONOMY_SIZE:s.version==4?V4_ECONOMY_SIZE:s.version==5?V5_ECONOMY_SIZE:s.version==6?V6_ECONOMY_SIZE:s.version==7?V7_ECONOMY_SIZE:s.version==8?V8_ECONOMY_SIZE:s.version==9?V9_ECONOMY_SIZE:s.version==10?V10_ECONOMY_SIZE:s.version==11?V11_ECONOMY_SIZE:s.version==12?V12_ECONOMY_SIZE:s.version==13?V13_ECONOMY_SIZE:s.version==14||s.version==15?V14_ECONOMY_SIZE:s.version==16?V16_ECONOMY_SIZE:s.version==17?V17_ECONOMY_SIZE:sizeof(s));++i)if(i<24||i>=28)h=(h^p[i])*16777619u;return h;}
+static constexpr U V18_ECONOMY_SIZE=V17_ECONOMY_SIZE+24;
+#ifdef PVP_DISTRICT_SHOPS
+static constexpr U ALL_BUSINESS_PLOTS=(1u<<BUSINESS_COUNT)-1;
+static U districtShopPlots(U user,U pinned){
+ U plots=pinned;
+ for(U zone=2;zone<=6;++zone){
+  U rng=neighborMix(user^0xa469faddu^(zone*0x9e3779b9u));
+  U count=zone==2?2:neighborRandom(rng)%3;
+  U choices[3]{},available=0,occupied=0;
+  for(U i=0;i<BUSINESS_COUNT;++i)if(BUSINESSES[i].zone==zone){
+   if(plots&(1u<<i))++occupied;
+   else choices[available++]=i;
+  }
+  while(occupied<count){
+   U roll=neighborRandom(rng);
+   U choice=available==3?roll%3:available==2?roll%2:0;
+   plots|=1u<<choices[choice];
+   choices[choice]=choices[--available];
+   ++occupied;
+  }
+ }
+ return plots;
+}
+static void initializeDistrictShops(Economy& s){
+ U pinned=s.businessOwnedMask&3u;
+ for(U i=0;i<2;++i)if(businessEnemy(s,i)||businessRaidAt(s,i))pinned|=1u<<i;
+ for(U i=0;i<s.historyCount;++i){
+  pinned|=(businessBit(s.history[i].target)|businessBit(s.historyDefended[i]))&3u;
+ }
+ if(s.battleOpen)pinned|=businessBit(s.battleNpc)&3u;
+ s.shopPlots=districtShopPlots(s.user,pinned);
+}
+static bool activeBusiness(const BusinessPlot& plot){
+ return economyRuntime.loaded&&!economyRuntime.blocked&&
+  (economyRuntime.state.shopPlots&businessBit(plot.id));
+}
+static bool validDistrictShops(const Economy& s){
+ if(s.shopPlots&~ALL_BUSINESS_PLOTS||s.businessOwnedMask&~s.shopPlots)return false;
+ U counts[7]{};
+ for(U i=0;i<BUSINESS_COUNT;++i){
+  bool selected=s.shopPlots&(1u<<i);
+  U zone=BUSINESSES[i].zone;
+  if(selected)++counts[zone];
+  if(((s.businessOwnedMask&(1u<<i))||businessEnemy(s,i)||businessRaidAt(s,i))&&
+     (!selected||!(s.regionsOpen&(1u<<(zone-1)))))return false;
+ }
+ if(counts[2]!=2)return false;
+ for(U zone=3;zone<=6;++zone)if(counts[zone]>2)return false;
+ return !s.battleOpen||!(businessBit(s.battleNpc)&~s.shopPlots);
+}
+#endif
+static U checkEconomy(const Economy&s){const unsigned char*p=reinterpret_cast<const unsigned char*>(&s);U h=2166136261u;for(U i=0;i<(s.version==1?LEGACY_ECONOMY_SIZE:s.version==2?V2_ECONOMY_SIZE:s.version==3?V3_ECONOMY_SIZE:s.version==4?V4_ECONOMY_SIZE:s.version==5?V5_ECONOMY_SIZE:s.version==6?V6_ECONOMY_SIZE:s.version==7?V7_ECONOMY_SIZE:s.version==8?V8_ECONOMY_SIZE:s.version==9?V9_ECONOMY_SIZE:s.version==10?V10_ECONOMY_SIZE:s.version==11?V11_ECONOMY_SIZE:s.version==12?V12_ECONOMY_SIZE:s.version==13?V13_ECONOMY_SIZE:s.version==14||s.version==15?V14_ECONOMY_SIZE:s.version==16?V16_ECONOMY_SIZE:s.version==17?V17_ECONOMY_SIZE:s.version==18?V18_ECONOMY_SIZE:sizeof(s));++i)if(i<24||i>=28)h=(h^p[i])*16777619u;return h;}
 static bool validEconomy(const Economy&s,U user){
  bool version=s.version==1||s.version==2;
 #ifdef PVP_BATTLE_ECONOMY
@@ -146,16 +237,16 @@ static bool validEconomy(const Economy&s,U user){
  if(s.stockClockInitialized>1||s.stockClockInitialized&&!s.stockInitialized||s.stockTestOffset< -86400||s.stockTestOffset>86400)return false;
 #endif
 #ifdef PVP_BUSINESS_BATTLE
- version=version||s.version==10;if(s.businessOwnedMask&~3u)return false;
+ version=version||s.version==10;if(s.version<=18&&s.businessOwnedMask&~3u)return false;
 #endif
 #ifdef PVP_BUSINESS_PRODUCTION
  version=version||s.version==11;
- if(s.version>=11)for(U i=0;i<2;++i){const auto& stock=s.businessStocks[i];
+ if(s.version>=11)for(U i=0;i<(s.version<=18?2:BUSINESS_COUNT);++i){const auto& stock=businessStock(s,i);
   const auto& rules=BUSINESSES[i].rules;
   if(stock.coins>rules.coinCapacity||stock.medals>rules.medalCapacity||stock.coinFraction>=3600||stock.medalFraction>=3600)return false;
   bool retained=false;
 #ifdef PVP_SILENT_RAIDS
-  retained=s.version>=16&&s.shopEnemy[i];
+  retained=s.version>=16&&businessEnemy(s,i);
 #endif
   if(!(s.businessOwnedMask&(1u<<i))&&!retained&&(stock.producedAt||stock.coins||stock.medals||stock.coinFraction||stock.medalFraction))return false;
   if(!stock.producedAt&&(stock.coins||stock.medals||stock.coinFraction||stock.medalFraction))return false;
@@ -164,7 +255,7 @@ static bool validEconomy(const Economy&s,U user){
 #ifdef PVP_REGIONS
  version=version||s.version==12;
  if(s.version>=12&&(s.regionsInitialized!=1||!s.regionsOpen||s.regionsOpen>63||(s.regionsOpen&(s.regionsOpen+1))))return false;
- if(s.version>=12&&s.businessOwnedMask&&!(s.regionsOpen&4))return false;
+ if(s.version>=12&&s.version<=18&&s.businessOwnedMask&&!(s.regionsOpen&4))return false;
 #endif
 #ifdef PVP_HISTORY
  version=version||s.version==13;
@@ -194,6 +285,10 @@ static bool validEconomy(const Economy&s,U user){
 #endif
 #ifdef PVP_WEEKLY_RULES
  version=version||s.version==18;
+#ifdef PVP_DISTRICT_SHOPS
+ version=version||s.version==19;
+ if(s.version==19&&!validDistrictShops(s))return false;
+#endif
  if(s.version>=18){
   const NpcPreset* victim=npc(s.daveTarget);
   if(s.neighborAttacks>15||s.daveActive>1||s.daveReplacement>1||s.daveActive&&s.daveReplacement)return false;
@@ -281,6 +376,10 @@ static bool saveEconomy(U b,Economy&s){
 #ifdef PVP_WEEKLY_RULES
  s.version=18;
 #endif
+#ifdef PVP_DISTRICT_SHOPS
+ if(!s.shopPlots)initializeDistrictShops(s);
+ s.version=19;
+#endif
  s.checksum=checkEconomy(s);if(!validEconomy(s,s.user))return false;
  char dst[160],tmp[160];economyPath(s.user,dst,false);economyPath(s.user,tmp,true);
  I fd=call<I>(b,0x148448,tmp,0x241,0600);if(fd<0)return false;U done=0;
@@ -339,7 +438,10 @@ static I loadEconomy(U b,Economy&s){
  length=length||(s.version==17&&done==V17_ECONOMY_SIZE);
 #endif
 #ifdef PVP_WEEKLY_RULES
- length=length||(s.version==18&&done==sizeof(s));
+ length=length||(s.version==18&&done==V18_ECONOMY_SIZE);
+#endif
+#ifdef PVP_DISTRICT_SHOPS
+ length=length||(s.version==19&&done==sizeof(s));
 #endif
  return length&&extra==0&&validEconomy(s,owner(b))?1:-1;
 }
@@ -424,6 +526,9 @@ static bool ensureEconomy(U b,P m,bool entering=false){
   r.loadedFromDisk=found==1;
   if(found<0){projectPlayerProgress(b,m,nullptr);r.blocked=true;log(b,"economy-invalid");return false;}
   if(!found){r.state.magic=0x45435650;r.state.version=2;r.state.user=user;r.state.coins=at<U>(m,4);r.state.home=1;}
+#ifdef PVP_DISTRICT_SHOPS
+  if(!r.state.shopPlots)initializeDistrictShops(r.state);
+#endif
   projectPlayerProgress(b,m,found?&r.state:nullptr);
 #ifdef PVP_REGIONS
   if(!r.state.regionsInitialized){

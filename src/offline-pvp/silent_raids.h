@@ -2,7 +2,10 @@
 // user's explicit probability rules and never create/finish a Board.
 #include "silent_raid_policy.h"
 #include "frozen_encounters.h"
-#ifdef PVP_WEEKLY_RULES
+#ifdef PVP_DISTRICT_SHOPS
+static_assert(__builtin_offsetof(Economy,shopPlots)==V18_ECONOMY_SIZE,"v18 economy prefix");
+static_assert(sizeof(Economy)==V18_ECONOMY_SIZE+4+36*(BUSINESS_COUNT-2),"v19 economy save layout");
+#elif defined(PVP_WEEKLY_RULES)
 static_assert(sizeof(Economy)==V17_ECONOMY_SIZE+24,"v18 economy save layout");
 #elif defined(PVP_NEIGHBOR_PROTECTION)
 static_assert(sizeof(Economy)==V16_ECONOMY_SIZE+4+4*NPC_COUNT,"v17 economy save layout");
@@ -31,12 +34,12 @@ static const NeighborEncounter* revengeEncounter(U b,U id){
 }
 static bool validSilentRaids(const Economy&s){
  if(s.raidInitialized>1||s.retaliationCount>64)return false;
- if(s.raidTestMask&~7u||s.raidTestDone&~s.raidTestMask||(!s.raidTestMask&&(s.raidTestDue||s.raidTestDone))||(s.raidTestMask&&!s.raidTestDue))return false;
+ if(s.raidTestMask&~((1u<<(BUSINESS_COUNT+1))-1)||s.raidTestDone&~s.raidTestMask||(!s.raidTestMask&&(s.raidTestDue||s.raidTestDone))||(s.raidTestMask&&!s.raidTestDue))return false;
  if(s.raidInitialized&&(!s.raidRng||!s.raidCheckedAt))return false;
- for(U i=0;i<2;++i){const NpcPreset*n=npc(s.shopEnemy[i]);
-  if(s.shopEnemyKind[i]>7)return false;
-  if(s.shopEnemy[i]){if(!n||n->evil||!s.shopEnemySeed[i]||(s.businessOwnedMask&(1u<<i)))return false;}
-  else if(s.shopEnemySeed[i]||s.shopEnemyKind[i])return false;
+ for(U i=0;i<(s.version<=18?2:BUSINESS_COUNT);++i){const NpcPreset*n=npc(businessEnemy(s,i));
+  if(businessEnemyKind(s,i)>7)return false;
+  if(businessEnemy(s,i)){if(!n||n->evil||!businessEnemySeed(s,i)||(s.businessOwnedMask&(1u<<i)))return false;}
+  else if(businessEnemySeed(s,i)||businessEnemyKind(s,i))return false;
  }
  for(U i=0;i<10;++i){
   if(s.historyMedals[i]>100000000||s.historyFlags[i]&~15u||s.historyFlags[i]>>1>6)return false;
@@ -64,7 +67,7 @@ static bool validSilentRaids(const Economy&s){
 }
 static bool localRaidOccupier(U b,U64 identity){
  if(!identity||identity>0xffffffffu||!economyRuntime.loaded||economyRuntime.user!=owner(b))return false;
- for(U i=0;i<2;++i)if(economyRuntime.state.shopEnemy[i]==U(identity))return true;
+ for(U i=0;i<BUSINESS_COUNT;++i)if(businessEnemy(economyRuntime.state,i)==U(identity))return true;
  return false;
 }
 static bool revengeAllowed(U b,U serial){
@@ -118,7 +121,7 @@ static U raidRoll(U&rng,U bound){
 static void initializeSilent(U b,Economy&next,U now){
  if(next.raidInitialized)return;
  next.raidInitialized=1;next.raidRng=neighborMix(owner(b)^now^next.sequence^0xa365bc71u);next.raidCheckedAt=now;
- for(U i=0;i<2;++i)if(next.businessOwnedMask&(1u<<i))next.shopRaidAt[i]=now;
+ for(U i=0;i<BUSINESS_COUNT;++i)if(next.businessOwnedMask&(1u<<i))businessRaidAt(next,i)=now;
  // Old v98 foreground jobs are deliberately not replayed or charged.
 }
 static bool chooseRaidOpponent(U b,Economy&next,bool fbi,NeighborEncounter&out){
@@ -178,8 +181,8 @@ static bool appendSilentDefense(U b,Economy&next,const NeighborEncounter&enemy,U
  next.history[0].kind=defended?4:3;next.history[0].time=when;
  next.historyMedals[0]=medals;next.historyDefended[0]=defended;
  next.historyFrozen[0][0]=lo;next.historyFrozen[0][1]=hi;++next.sequence;
- if(defended){U index=businessBit(defended)==1?0:1;next.businessOwnedMask&=~(1u<<index);
-  next.shopEnemy[index]=enemy.id;next.shopEnemySeed[index]=enemy.seed;next.shopEnemyKind[index]=enemy.kind;
+ if(defended){U index=businessIndex(defended);next.businessOwnedMask&=~(1u<<index);
+  businessEnemy(next,index)=enemy.id;businessEnemySeed(next,index)=enemy.seed;businessEnemyKind(next,index)=enemy.kind;
   // Existing inventory is retained but stops producing until recapture.
  }
  return true;
@@ -205,14 +208,14 @@ static void raidTick(U b){
  for(U processed=0;processed<96;++processed){
   U when=0xffffffffu,source=0,index=0;
   if(next.raidCheckedAt<=0xffffffffu-86400&&next.raidCheckedAt+86400<=now){when=next.raidCheckedAt+86400;source=1;}
-  for(U i=0;i<2;++i)if(next.businessOwnedMask&(1u<<i)){
-   if(!next.shopRaidAt[i]){next.shopRaidAt[i]=now;changed=true;}
-   if(next.shopRaidAt[i]<=0xffffffffu-86400&&next.shopRaidAt[i]+86400<=now&&next.shopRaidAt[i]+86400<when){when=next.shopRaidAt[i]+86400;source=2;index=i;}
+  for(U i=0;i<BUSINESS_COUNT;++i)if(next.businessOwnedMask&(1u<<i)){
+   if(!businessRaidAt(next,i)){businessRaidAt(next,i)=now;changed=true;}
+   if(businessRaidAt(next,i)<=0xffffffffu-86400&&businessRaidAt(next,i)+86400<=now&&businessRaidAt(next,i)+86400<when){when=businessRaidAt(next,i)+86400;source=2;index=i;}
   }
   for(U i=0;i<next.retaliationCount;++i)if(next.retaliations[i].due<=now&&next.retaliations[i].due<when){when=next.retaliations[i].due;source=3;index=i;}
 #ifdef PVP_SILENT_RAID_TEST
   if(next.raidTestMask&&next.raidTestDue<=now&&next.raidTestDue<=when){
-   for(U bit=0;bit<3;++bit)if((next.raidTestMask&(1u<<bit))&&!(next.raidTestDone&(1u<<bit))){when=next.raidTestDue;source=4;index=bit;break;}
+   for(U bit=0;bit<BUSINESS_COUNT+1;++bit)if((next.raidTestMask&(1u<<bit))&&!(next.raidTestDone&(1u<<bit))){when=next.raidTestDue;source=4;index=bit;break;}
   }
 #endif
   if(!source)break;changed=true;accrueProduction(next,when);
@@ -220,11 +223,11 @@ static void raidTick(U b){
   U roll=raidRoll(next.raidRng,10000),outcome=0,defended=0;
 #ifdef PVP_SILENT_RAID_TEST
   if(source==4){next.raidTestDone|=1u<<index;if(!index){outcome=3;next.raidCheckedAt=when;}
-   else{U shop=index-1;next.shopRaidAt[shop]=when;if(next.businessOwnedMask&(1u<<shop)){outcome=2;defended=BUSINESSES[shop].id;}}
+   else{U shop=index-1;businessRaidAt(next,shop)=when;if(next.businessOwnedMask&(1u<<shop)){outcome=2;defended=BUSINESSES[shop].id;}}
   }else
 #endif
   if(source==1){next.raidCheckedAt=when;outcome=naturalOutcome(strength,roll);if(!hasHome&&outcome!=3)outcome=0;}
-  else {next.shopRaidAt[index]=when;if(roll<1000){outcome=2;defended=BUSINESSES[index].id;}}
+  else {businessRaidAt(next,index)=when;if(roll<1000){outcome=2;defended=BUSINESSES[index].id;}}
   if(outcome){NeighborEncounter enemy{};U frozen[2]{};
    bool chosen=chooseRaidOpponent(b,next,outcome==3,enemy);
    if(!chosen&&defended)chosen=chooseRaidOpponent(b,next,true,enemy);
@@ -243,7 +246,7 @@ static bool silentBacklog(U b){
  const auto&s=economyRuntime.state;if(!s.raidInitialized||economyRuntime.user!=owner(b))return false;
  U now=realNow(b);
  if(s.raidCheckedAt<=now&&now-s.raidCheckedAt>=86400)return true;
- for(U i=0;i<2;++i)if((s.businessOwnedMask&(1u<<i))&&s.shopRaidAt[i]<=now&&now-s.shopRaidAt[i]>=86400)return true;
+ for(U i=0;i<BUSINESS_COUNT;++i)if((s.businessOwnedMask&(1u<<i))&&businessRaidAt(s,i)<=now&&now-businessRaidAt(s,i)>=86400)return true;
  for(U i=0;i<s.retaliationCount;++i)if(s.retaliations[i].due<=now)return true;
  return false;
 }

@@ -44,14 +44,22 @@ static void removeLockedNeighbors(U b,P m){
  P first=at<P>(m,0x128),last=at<P>(m,0x12c);
  if(bool(first)!=bool(last)||(first&&last<first)||U(last-first)>64*256||U(last-first)%64)return;
  for(P p=first;p<last;){const NpcPreset*n=npc(at<U>(p,0));
-  if(n&&!n->evil&&!regionOpen(n->zone)&&at<U>(p,28)==n->zone&&at<U>(p,32)==n->position){
+  bool hidden=n&&!regionOpen(n->zone);
+#ifdef PVP_DISTRICT_SHOPS
+  if(n)if(const auto* shop=businessPlot(n->zone,n->position))hidden=hidden||activeBusiness(*shop);
+#endif
+  if(n&&!n->evil&&hidden&&at<U>(p,28)==n->zone&&at<U>(p,32)==n->position){
    release(b,at<P>(p,8),true);bytes(p,p+64,U(last-p-64));last-=64;at<P>(m,0x12c)=last;
   }else p+=64;
  }
  first=at<P>(m,0x110);last=at<P>(m,0x114);
  if(bool(first)!=bool(last)||(first&&last<first)||U(last-first)>64*256||U(last-first)%64)return;
  for(P p=first;p<last;){const BusinessPlot*s=businessId(at<U>(p,0));
-  if(s&&!regionOpen(s->zone)&&at<U>(p,48)==s->zone&&at<U>(p,52)==s->position){
+  bool hidden=s&&!regionOpen(s->zone);
+#ifdef PVP_DISTRICT_SHOPS
+  if(s)hidden=hidden||!activeBusiness(*s);
+#endif
+  if(s&&hidden&&at<U>(p,48)==s->zone&&at<U>(p,52)==s->position){
    release(b,at<P>(p,16),true);bytes(p,p+64,U(last-p-64));last-=64;at<P>(m,0x114)=last;
   }else p+=64;
  }
@@ -78,6 +86,11 @@ static U regionAction(U b,P panel,U button){
  if(r.state.coins<price){economyNotice(b,"[V93_REGION_COINS_REQUIRED]");return 1;}
  Economy next=r.state;next.coins-=price;next.regionsOpen|=1u<<(zone-1);
  if(!commitProgression(b,m,next))return 1;
- projectGarden(b,m);call<void>(b,0x100a864,map);
+ projectGarden(b,m);
+#ifdef PVP_DISTRICT_SHOPS
+ // Rebuild the stock street models after the newly unlocked records exist.
+ if(at<P>(map,0xa8))call<void>(b,0x100a5ac,map);
+#endif
+ call<void>(b,0x100a864,map);
  log(b,"region-unlocked",zone,price);return 1;
 }

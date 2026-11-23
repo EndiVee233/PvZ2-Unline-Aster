@@ -194,6 +194,9 @@ static const NeighborEncounter* encounter(U b,U id){
  return findEncounter(*neighborRoster,id);
 }
 static void projectDynamicNeighbor(U b,P m,const NpcPreset&n){
+#ifdef PVP_DISTRICT_SHOPS
+ if(const auto* shop=businessPlot(n.zone,n.position))if(activeBusiness(*shop))return;
+#endif
  const auto*e=encounter(b,n.id);if(!e||!e->seed)return;
  U title[40]{};neighborName(e->seed,e->kind,title);
  const U*displayName=title;

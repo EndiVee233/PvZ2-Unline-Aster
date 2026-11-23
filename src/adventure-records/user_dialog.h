@@ -41,7 +41,6 @@ struct UserDialog {
     ButtonSkin portraits[friendAvatarCount];
     ButtonSkin packets[4];
     ButtonSkin mapSkin, mapPressed;
-    const char32_t* friendCaption;
     const char32_t* signCaption;
     const char* signName;
     ButtonSkin cnArt[CnArtCount];
@@ -661,7 +660,6 @@ static void updateUserDialog(Word base) {
         changeMenuGroup(base, app, 2U, true);
         resolveMenuSkin(base, user.mapSkin, "IMAGE_ASTER_SOCIAL_USER_BUTTON", 2U);
         resolveMenuSkin(base, user.mapPressed, "IMAGE_ASTER_SOCIAL_USER_BUTTON_DOWN", 2U);
-        if (!user.friendCaption) makeText(base, user.friendCaption, U"好友");
         static constexpr char artKeys[CnArtCount][44] = {
             "", "IMAGE_ASTER_SOCIAL_CN_USER_FRAME", "IMAGE_ASTER_SOCIAL_CN_USER_DAVE",
             "IMAGE_ASTER_SOCIAL_CN_USER_HINT", "IMAGE_ASTER_SOCIAL_CN_USER_GIFT", "IMAGE_ASTER_SOCIAL_CN_USER_NAME",
@@ -909,10 +907,6 @@ extern "C" void asterUserDraw(Word base, Object widget, Object graphics) {
         native<void>(base, 0x1166e74, graphics, false);
         const auto button = userMapSkinBounds(sprite, box, true, box.height / 10);
         userSkinImage(base, graphics, sprite, button);
-        const auto font = field<Object>(reinterpret_cast<Object>(base), katong18);
-        const auto ink = user.friendPressed ? MenuColor{218, 227, 220, 255} : katongWhite;
-        drawOutlinedKatong(base, graphics, font, user.friendCaption, float(button.x),
-                           button.y + button.height * 0.52f, float(button.width), ink);
         field<unsigned char>(graphics, 0x64) = tint;
         return;
     }

@@ -1,4 +1,4 @@
-"""Build the ARM32 friend roster and replace its world-map art."""
+"""Build the ARM32 friend roster and align the world-map HUD."""
 import argparse
 from io import BytesIO
 from pathlib import Path
@@ -12,12 +12,14 @@ from keystone import Ks, KS_ARCH_ARM, KS_MODE_ARM
 from build_aster_adventure_records import (
     CHOOSER_RESTORE, CHOOSER_RESTORE_CALL, payload, social_dex,
 )
-from build_aster_hud_pickup import ASSET, BOOTSTRAP, PLAN, create_plan, rebuild_dynamic_bootstrap
+from build_aster_hud_pickup import (
+    ASSET, BOOTSTRAP, PLAN, Bundle, create_plan, rebuild_dynamic_bootstrap, replace_rton,
+)
 from build_aster_pvp_feedback import pack_apk
 from build_aster_save_path_fix import manifest_version
 from prepare_aster_adventure_levels import write_packet_anchors, write_user_plants
 from prepare_aster_pvp_runtime import file_offset
-from prepare_aster_social_art import add_friend_button_art
+from prepare_seasonal_activities import MAP_LAYOUTS
 from prepare_profile_memory import branch
 
 
@@ -121,6 +123,33 @@ def patch_guest(engine, ndk, output, old_social, star_overlay):
     return bytes(patched)
 
 
+def align_world_map(document):
+    offsets = {alias: entry["objdata"]["PositionOffset"] for entry in document["objects"]
+               for alias in entry.get("aliases", ())
+               if alias.startswith("UIWorldMap") and "PositionOffset" in entry["objdata"]}
+
+    plants = offsets["UIWorldMapPlantLevelUpButton"]
+    endless = offsets["UIWorldMapDailyAchievementButton"]
+    expedition = offsets["UIWorldMapPlantAdventure"]
+    treasure = offsets["UIWorldMapTreasureButton"]
+    # Align the visible artwork. The native sprite canvases include different
+    # amounts of transparent margin, including space for the status badges.
+    plants["x"] = -2
+    offsets["UIWorldMapActivityLevelsButton"].update(x=0, y=plants["y"] - 100)
+    endless.update(x=-6, y=endless["y"] - 8)
+    expedition.update(x=treasure["x"] - 2, y=expedition["y"] + 24)
+    treasure["y"] = -2
+    offsets["UIWorldMapPVPButton"]["y"] = -2
+    offsets["UIWorldMapUniverseViewButton"].update(x=-2, y=-8)
+
+
+def patch_map_hud(original):
+    bundle = Bundle(original)
+    for path in MAP_LAYOUTS:
+        replace_rton(bundle, path, align_world_map, allow_growth=True)
+    return bundle.build()
+
+
 def build(base, previous, stock, old_social, star_overlay, sdk, ndk, output, signing):
     output.mkdir(parents=True, exist_ok=True)
     write_packet_anchors(stock, output)
@@ -129,16 +158,16 @@ def build(base, previous, stock, old_social, star_overlay, sdk, ndk, output, sig
     with ZipFile(base) as archive:
         engine = patch_guest(archive.read(ENGINE), ndk, output, old_social, star_overlay)
     with ZipFile(previous) as archive:
-        manifest = manifest_version(archive.read("AndroidManifest.xml"), 322, 321, prefix="A")
+        manifest = manifest_version(archive.read("AndroidManifest.xml"), 323, 322, prefix="A")
         original = archive.read(ASSET)
-        dynamic = add_friend_button_art(original)
+        dynamic = patch_map_hud(original)
         bootstrap = rebuild_dynamic_bootstrap(archive.read(BOOTSTRAP), output / "bootstrap", original, dynamic)
         dex, = (name for name in archive.namelist() if name.startswith("classes") and name.endswith(".dex")
                 and b"Lcom/popcap/pvz2cthd/AdventureFriendFiles;" in archive.read(name))
     (output / "libSrc.so").write_bytes(engine)
     plan = create_plan(dynamic, output, rgba_atlases=1)
     companion = social_dex(output / "social-dex", sdk)
-    target = output / "PvZ2-Unline-Aster-A322-ARM32-WSA-existing-data.apk"
+    target = output / "PvZ2-Unline-Aster-A323-ARM32-WSA-existing-data.apk"
     pack_apk(previous, {ENGINE: engine, "AndroidManifest.xml": manifest, ASSET: dynamic,
                         BOOTSTRAP: bootstrap, PLAN: plan, dex: companion}, sdk, target, signing)
     print(target)

@@ -41,7 +41,7 @@ def rebuild_bootstrap(original, out, replacements, apktool, *, extraction_art=Fa
  p=out/'smali/com/popcap/pvz2cthd/BootActivity.smali';s=p.read_text(encoding='utf8')
  # One substitution pass avoids cascading if the new base checksum equals the old target.
  for old in replacements:assert old in s,old
- s=re.sub('|'.join(re.escape(k) for k in replacements),lambda m:replacements[m[0]],s)
+ if replacements:s=re.sub('|'.join(re.escape(k) for k in replacements),lambda m:replacements[m[0]],s)
  if extraction_art:s=use_extraction_title_art(s)
  if transform:s=transform(s)
  p.write_text(s,encoding='utf8')

@@ -120,7 +120,7 @@ def build(base, stock, old_social, star_overlay, sdk, ndk, output, signing):
     write_user_plants(base, output)
     copyfile(old_social.with_name("adventure_levels.inc"), output / "adventure_levels.inc")
     with ZipFile(base) as archive:
-        manifest = manifest_version(archive.read("AndroidManifest.xml"), 318, 315, prefix="A")
+        manifest = manifest_version(archive.read("AndroidManifest.xml"), 319, 315, prefix="A")
         engine = patch_guest(archive.read(ENGINE), ndk, output, old_social, star_overlay)
         original = archive.read(ASSET)
         dynamic = patch_friend_entry(original)
@@ -130,7 +130,7 @@ def build(base, stock, old_social, star_overlay, sdk, ndk, output, signing):
     (output / "libSrc.so").write_bytes(engine)
     plan = create_plan(dynamic, output, rgba_atlases=1)
     companion = social_dex(output / "social-dex", sdk)
-    target = output / "PvZ2-Unline-Aster-A318-ARM32-WSA-existing-data.apk"
+    target = output / "PvZ2-Unline-Aster-A319-ARM32-WSA-existing-data.apk"
     pack_apk(base, {ENGINE: engine, "AndroidManifest.xml": manifest, ASSET: dynamic,
                     BOOTSTRAP: bootstrap, PLAN: plan, dex: companion}, sdk, target, signing,
              excluded=("assets/adventure/friends.json",))

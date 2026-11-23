@@ -64,7 +64,11 @@ struct FriendBook {
 };
 static FriendBook friendBook;
 constexpr int friendTabWidth = 140;
-constexpr int friendTabBodyHeight = 73;
+constexpr int friendTabBodyHeight = borrowTop;
+constexpr int tabSpriteWidth = 672;
+constexpr int tabSpriteBodyHeight = 352;
+constexpr int tabSpriteHeight = 428;
+constexpr int tabSpritePointerHeight = tabSpriteHeight - tabSpriteBodyHeight;
 constexpr int friendTabX(Word index) { return 237 + 190 * int(index) - friendTabWidth / 2; }
 
 static bool friendsPage() {
@@ -490,9 +494,38 @@ static void userSkinImage(Word base, Object graphics, Object bitmap, MenuRect bo
 // Loaded by the stock UI from FZKATJW.TTF (FZKaTong-M19S).
 constexpr Word katong18 = 0x184110c;
 constexpr Word katong20 = 0x1841110;
+constexpr MenuColor katongWhite{255, 255, 255, 255};
+
+static void drawOutlinedKatong(Word base, Object graphics, Object font, const char32_t* caption,
+                               float x, float y, float width, const MenuColor& ink) {
+    if (!font || !caption) return;
+    constexpr MenuColor black{0, 0, 0, 255};
+    const auto draw = [&](float dx, float dy, const MenuColor& color) {
+        native<void>(base, 0x13af2d0, font, graphics, x + dx, y + dy,
+                     width, &caption, 1U, &color, 0U);
+    };
+    for (int direction = -1; direction <= 1; direction += 2) {
+        draw(direction * 3, 0, black);
+        draw(0, direction * 3, black);
+        draw(direction * 2.2f, -2.2f, black);
+        draw(direction * 2.2f, 2.2f, black);
+    }
+    draw(-0.75f, 0, ink);
+    draw(0.75f, 0, ink);
+    draw(0, 0, ink);
+}
 
 static Word selectedFriendTab() {
     return user.page == UserPage::AddFriend ? 1U : 0U;
+}
+
+static MenuRect friendTabBody(Object dialog, Word tab) {
+    return userLayout(dialog, {friendTabX(tab), 0, friendTabWidth, friendTabBodyHeight});
+}
+
+static MenuRect friendTabWithPointer(MenuRect body) {
+    body.height = body.height * tabSpriteHeight / tabSpriteBodyHeight;
+    return body;
 }
 
 static void drawFriendBookBackdrop(Word base, Object dialog, Object graphics) {
@@ -500,9 +533,11 @@ static void drawFriendBookBackdrop(Word base, Object dialog, Object graphics) {
     native<void>(base, 0x1166e74, graphics, false);
     userSkinImage(base, graphics, friendBook.art[FriendBook::Topper].image,
                   userLayout(dialog, {18, 21, 634, 46}));
-    const Word tab = 1U - selectedFriendTab();
+    const Word selected = selectedFriendTab();
     userSkinImage(base, graphics, friendBook.art[FriendBook::Tab].image,
-                  userLayout(dialog, {friendTabX(tab), 0, friendTabWidth, friendTabBodyHeight}));
+                  friendTabBody(dialog, 1U - selected));
+    userSkinImage(base, graphics, friendBook.art[FriendBook::Selected].image,
+                  friendTabWithPointer(friendTabBody(dialog, selected)));
     field<unsigned char>(graphics, 0x64) = savedTint;
 }
 
@@ -522,23 +557,31 @@ static void drawFriendTabs(Word base, Object dialog, Object graphics) {
     const auto appBase = reinterpret_cast<Object>(base);
     auto font = field<Object>(appBase, katong20);
     const auto label = friendBook.captions[1];
-    const int captionWidth = userLayout(dialog, {0, 0, friendTabWidth - 8, 0}).width;
+    const int captionWidth = userLayout(dialog, {0, 0, friendTabWidth - 12, 0}).width;
     if (font && label && native<int>(base, 0x13ae4f0, font, &label) > captionWidth)
         font = field<Object>(appBase, katong18);
     const Word selected = selectedFriendTab();
+    const auto selectedBody = friendTabBody(dialog, selected);
+    // Scale the pointer at the sprite's original aspect ratio and clip the
+    // body. This keeps the window trim visible on both sides of the point.
+    const int pointerHeight =
+        (selectedBody.width * tabSpritePointerHeight + tabSpriteWidth / 2) / tabSpriteWidth;
+    const MenuRect pointer{selectedBody.x, selectedBody.y + selectedBody.height,
+                           selectedBody.width, pointerHeight};
+    const int artHeight =
+        (pointerHeight * tabSpriteHeight + tabSpritePointerHeight / 2) / tabSpritePointerHeight;
+    const MenuRect selectedArt{pointer.x, pointer.y + pointer.height - artHeight,
+                               pointer.width, artHeight};
+    auto& clip = field<MenuRect>(graphics, 0x20);
+    const auto savedClip = clip;
+    native<void>(base, 0x116b2c4, graphics, &pointer);
+    userSkinImage(base, graphics, friendBook.art[FriendBook::Selected].image, selectedArt);
+    clip = savedClip;
     for (Word i = 0; i < 2; ++i) {
-        const MenuRect body = userLayout(dialog, {friendTabX(i), 0, friendTabWidth, friendTabBodyHeight});
-        // Both sprites use a 672×352 tab body. The selected sprite extends
-        // below it and overlaps the frame with its pointer.
-        if (i == selected) {
-            MenuRect art = body;
-            art.height = body.height * 428 / 352;
-            userSkinImage(base, graphics, friendBook.art[FriendBook::Selected].image, art);
-        }
-        if (font && friendBook.captions[i])
-            native<void>(base, 0x13af2d0, font, graphics, body.x + (body.width - captionWidth) * 0.5f,
-                         body.y + body.height * 0.24f, float(captionWidth), &friendBook.captions[i],
-                         1U, &userWhite, 0U);
+        const auto body = friendTabBody(dialog, i);
+        drawOutlinedKatong(base, graphics, font, friendBook.captions[i],
+                           body.x + (body.width - captionWidth) * 0.5f,
+                           body.y + body.height * 0.18f, float(captionWidth), katongWhite);
     }
 }
 
@@ -831,19 +874,11 @@ static void drawMapCaption(Word base, Object graphics, MenuRect button, const ch
     const MenuColor green = pressed ? MenuColor{48, 74, 60, 255} : MenuColor{120, 184, 150, 255};
     userRect(base, graphics, {button.x + width * 17 / 100, button.y + height * 24 / 100,
                               width * 68 / 100, height * 49 / 100}, green);
-    constexpr MenuColor black{0, 0, 0, 255};
     // The PrimeFont draw call centers the line horizontally. Its glyph ink
     // begins below the line origin, so lift the baseline inside the button.
-    const float textY = button.y + height * 0.21f;
-    const auto draw = [&](int x, int y) {
-        native<void>(base, 0x13af2d0, font, graphics, float(button.x + x), textY + y,
-                     float(width), &caption, 1U, &black, 0U);
-    };
-    draw(-1, 0);
-    draw(1, 0);
-    draw(0, -1);
-    draw(0, 1);
-    draw(0, 0);
+    const MenuColor ink = pressed ? MenuColor{218, 227, 220, 255} : katongWhite;
+    drawOutlinedKatong(base, graphics, font, caption, float(button.x), button.y + height * 0.21f,
+                       float(width), ink);
     native<void>(base, 0x1166c30, graphics, &previous);
 }
 

@@ -1,4 +1,4 @@
-"""Build the ARM32 friend roster and corrected lending cards over A315."""
+"""Build the ARM32 friend roster, lending cards and map captions over A315."""
 import argparse
 from io import BytesIO
 from pathlib import Path
@@ -7,6 +7,7 @@ import struct
 from zipfile import ZipFile
 
 from elftools.elf.elffile import ELFFile
+from keystone import Ks, KS_ARCH_ARM, KS_MODE_ARM
 
 from build_aster_adventure_records import patch_friend_entry, payload, social_dex
 from build_aster_hud_pickup import ASSET, BOOTSTRAP, PLAN, create_plan, rebuild_dynamic_bootstrap
@@ -19,6 +20,7 @@ from prepare_profile_memory import branch
 
 ENGINE = "lib/armeabi/libSrc.so"
 PAGE = 4096
+SIGN_SPRITE_DRAW = 0xA1D304
 
 
 def aligned(value):
@@ -57,6 +59,26 @@ def patch_guest(engine, ndk, output, old_social, star_overlay):
     for prior, names in ((old_social, None), (star_overlay, {"asterAdventureNextStar"})):
         for name, address, offset in installed_entries(engine, source, prior, names=names):
             patched[offset:offset + 4] = branch(address, entries[name])
+
+    # Replace only the sign-in background draw. The original widget still
+    # owns its pressed state, hit testing, and the reward notification badge.
+    code.extend(bytes(-len(code) % 4))
+    stub = code_address + len(code)
+    original = file_offset(source, SIGN_SPRITE_DRAW)
+    if engine[original:original + 4] != branch(SIGN_SPRITE_DRAW, 0x11694C8, link=True):
+        raise ValueError("Unexpected sign-in background draw call")
+    assembler = Ks(KS_ARCH_ARM, KS_MODE_ARM)
+    code.extend(assembler.asm(f"""
+        mov r2,r1
+        mov r1,r0
+        ldrb r3,[r5,#0xec]
+        adr r0,basepoint
+        ldr ip,[r0]
+        sub r0,r0,ip
+        b #{entries["asterSignMapDraw"]}
+        basepoint: .word {stub + 28}
+    """, stub)[0])
+    patched[original:original + 4] = branch(SIGN_SPRITE_DRAW, stub, link=True)
 
     # Houdini expects the program table to stay beside the ELF header.
     # The extra header occupies the unused interpreter name and the start of
@@ -98,7 +120,7 @@ def build(base, stock, old_social, star_overlay, sdk, ndk, output, signing):
     write_user_plants(base, output)
     copyfile(old_social.with_name("adventure_levels.inc"), output / "adventure_levels.inc")
     with ZipFile(base) as archive:
-        manifest = manifest_version(archive.read("AndroidManifest.xml"), 316, 315, prefix="A")
+        manifest = manifest_version(archive.read("AndroidManifest.xml"), 317, 315, prefix="A")
         engine = patch_guest(archive.read(ENGINE), ndk, output, old_social, star_overlay)
         original = archive.read(ASSET)
         dynamic = patch_friend_entry(original)
@@ -108,7 +130,7 @@ def build(base, stock, old_social, star_overlay, sdk, ndk, output, signing):
     (output / "libSrc.so").write_bytes(engine)
     plan = create_plan(dynamic, output, rgba_atlases=1)
     companion = social_dex(output / "social-dex", sdk)
-    target = output / "PvZ2-Unline-Aster-A316-ARM32-WSA-existing-data.apk"
+    target = output / "PvZ2-Unline-Aster-A317-ARM32-WSA-existing-data.apk"
     pack_apk(base, {ENGINE: engine, "AndroidManifest.xml": manifest, ASSET: dynamic,
                     BOOTSTRAP: bootstrap, PLAN: plan, dex: companion}, sdk, target, signing)
     print(target)

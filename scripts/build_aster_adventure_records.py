@@ -669,7 +669,7 @@ def patch_friend_entry(dynamic):
                   for alias in entry.get("aliases", ())}
         user = sheets["UIWorldMapUserButton"]
         button = user.copy()
-        button["PositionOffset"] = {"x": user["PositionOffset"]["x"] + 79,
+        button["PositionOffset"] = {"x": user["PositionOffset"]["x"] + 67,
                                     "y": user["PositionOffset"]["y"]}
         document["objects"].append(
             {"objclass": "UIWidgetSheet", "aliases": ["UIWorldMapFriendButton"], "objdata": button})

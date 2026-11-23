@@ -220,7 +220,7 @@ final class AdventureFriendFiles {
     }
 
     private static String recordName(String prefix, AdventureFormationRecord record) {
-        String day = record.day <= 2 ? "0" + record.day : Integer.toHexString(record.day);
+        String day = Integer.toHexString(record.day);
         return prefix + day + "-" + record.stars + ".run";
     }
 

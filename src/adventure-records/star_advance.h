@@ -3,6 +3,7 @@
 struct ChallengeChoice {
     Word owner, day, stars, expires;
     bool applied;
+    Word mask = 0;
 };
 
 // A negative result either keeps the stock flow or finishes this level.
@@ -29,7 +30,7 @@ static int advanceAdventureStar(Word base, Object page, Object board, Word playe
     const Word count = field<Word>(page, 0x44), index = field<Word>(page, 0x48);
     const Word mode = field<Word>(page, 0x4c);
     // Mode 3 is the pre-battle conditions page. A failed challenge uses mode 0.
-    if (count != 3 || index >= count || mode < 1 || mode > 2 || choice.stars != index + 1 ||
+    if (count != 3 || index >= count || mode < 1 || mode > 2 || (choice.mask ? !(choice.mask & (1U << index)) : choice.stars != index + 1) ||
         levelId(field<const char*>(board, 0xc4)) != choice.day) return stockStarFlow;
     const int saved = starMask(base, count, index, mode);
     if (saved < 0) return stockStarFlow;

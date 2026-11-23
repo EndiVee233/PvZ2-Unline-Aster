@@ -1,4 +1,5 @@
 #pragma once
+#include "star_rules.h"
 #include "star_advance.h"
 
 namespace {
@@ -55,6 +56,7 @@ static void releaseString(Word base, const char* value) {
 #include "level_menu.h"
 #include "formation_view.h"
 #include "social_settings.h"
+#include "star_multiselect.h"
 
 namespace {
 static void startStockLevel(Word base) {
@@ -154,7 +156,9 @@ extern "C" void asterAdventureChoose(Word base, Object scene, const char* const*
         if (size < sizeof(social.stage)) {
             const Word clock = wallTime(base);
             social.scene = scene;
-            menu.unlocked = starChallengesUnlocked(base, *level, &menu.earnedStars);
+            menu.unlocked = starChallengesUnlocked(base, *level, &menu.earnedStars) ||
+                (level->stars > 1 && starDifficulty(base) == StarDifficulty::Easy);
+            menu.multiselect = level->stars > 1 && starDifficulty(base) != StarDifficulty::Hard;
             if (level->stars > 1 && !menu.unlocked) {
                 selectedChallenge = {player, level->key, 0, clock + 2000U, false};
                 native<void>(base, 0x354360, scene, stage, alias, seed, transition, flags);
@@ -173,6 +177,7 @@ extern "C" void asterAdventureChoose(Word base, Object scene, const char* const*
             selectedChallenge.day = 0;
             menu.level = level;
             menu.stars = level->stars == 1 ? 1 : 0;
+            menu.chosenStars = starBit(menu.stars);
             menu.action = menu.page = menu.watch = menu.scoreCount = menu.selectedScore = 0;
             for (Word i = 0; i <= size; ++i) social.stage[i] = name[i];
             native<int>(base, 0x148424, replyFile);
@@ -224,13 +229,18 @@ static void updateMenu(Word base, Word clock) {
         return;
     }
     if (action == Enter) {
-        if (menu.stars && !starChallengesUnlocked(base, *menu.level)) {
+        const Word mask = menu.chosenStars;
+        if (conflictingStars(*menu.level, mask)) return;
+        if (mask && !(menu.level->stars > 1 && starDifficulty(base) == StarDifficulty::Easy)
+                 && !starChallengesUnlocked(base, *menu.level)) {
             menu.unlocked = false;
             if (!showMenu(base)) endMenu(base);
             return;
         }
         endMenu(base);
-        selectedChallenge = {social.id.owner, social.id.day, menu.stars, clock + 2000U, false};
+        selectedChallenge = {social.id.owner, social.id.day,
+                             mask & starBit(menu.stars) ? menu.stars : firstStar(mask), clock + 2000U, false,
+                             severalStars(mask) ? mask : 0};
         startStockLevel(base);
         return;
     }
@@ -258,6 +268,9 @@ static void updateMenu(Word base, Word clock) {
     } else if (action >= SelectStars + Word(menu.level->stars == 1) &&
                action <= SelectStars + menu.level->stars) {
         menu.stars = action - SelectStars;
+        const Word bit = starBit(menu.stars);
+        if (menu.multiselect && bit && menu.unlocked) menu.chosenStars ^= bit;
+        else menu.chosenStars = bit;
         menu.page = menu.selectedScore = 0;
     } else if (action == PrevPage && menu.page) {
         --menu.page;
@@ -278,9 +291,10 @@ extern "C" void asterAdventureSocialFrame(Word base) {
     // Restart can create a new Board in the same scene. Keep the selected
     // tier through that transition, and retire it on leaving the battle.
     if (selectedChallenge.day && selectedChallenge.applied &&
-        (field<Word>(social.scene, 0x984) != 6 ||
+        ((social.scene ? field<Word>(social.scene, 0x984) != 6 : gameBoard(base) != multiStar.board) ||
          owner(ownerStore(base)) != selectedChallenge.owner)) {
         selectedChallenge.day = 0;
+        multiStar.board = nullptr;
     }
     if (social.phase == SocialPhase::Idle) return;
     Object board = gameBoard(base);
@@ -361,6 +375,11 @@ extern "C" void asterAdventureViewLoaded(Word base, Object board) {
 
 extern "C" bool asterAdventureSelectChallenge(Word base, Object board, Object properties) {
     if (!board || board != gameBoard(base)) return false;
+    multiStar.board = nullptr;
+    multiStar.mask = multiStar.failed = multiStar.passed = multiStar.newStars = 0;
+    multiStar.checked = multiStar.awarded = false;
+    multiStar.rewardImage = {};
+    pendingMultiRecord = nullptr;
     const auto* level = AdventureRecords::findLevel(field<const char*>(board, 0xc4));
     if (!level) return false;
     const Word day = level->key;
@@ -372,7 +391,10 @@ extern "C" bool asterAdventureSelectChallenge(Word base, Object board, Object pr
             choice.owner == owner(ownerStore(base)) &&
             (choice.applied || static_cast<int>(wallTime(base) - choice.expires) < 0);
         if (chosen) {
-            if (choice.stars && !choice.applied && !starChallengesUnlocked(base, *level)) choice.stars = 0;
+            if (choice.stars && !choice.applied && !(level->stars > 1 && starDifficulty(base) == StarDifficulty::Easy)
+                && !starChallengesUnlocked(base, *level)) {
+                choice.stars = choice.mask = 0;
+            }
             if (choice.stars) {
                 const Word first = field<Word>(properties, 0x1c);
                 const Word last = field<Word>(properties, 0x20);

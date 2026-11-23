@@ -50,6 +50,13 @@ static bool hasCompleted;
 
 #ifdef ASTER_SOCIAL_LEVELS
 static bool socialContentEnabled(Word base);
+namespace {
+static bool activeMultiStar(Object board);
+static Word evaluateMultiStar(Object board);
+static void recoverMultiStar(Word base, Object board);
+static Object pendingMultiRecord;
+static bool pendingRecordAssisted;
+}
 static void bindBorrowedCard(Object board);
 static void dropBorrowedCard(Word base, Object board);
 #include "loadout.h"
@@ -206,6 +213,9 @@ extern "C" void asterAdventureStart(Word base, Object board) {
 extern "C" void asterAdventureTick(Word base, Object board) {
     // A saved battle can restore directly to the live phase.
     restoreEgyptEndlessPlantUpdates(base, board);
+#ifdef ASTER_SOCIAL_LEVELS
+    recoverMultiStar(base, board);
+#endif
     if (current.board != board || !current.board) return;
     if (!sameRun(base, board)) {
         current.board = nullptr;
@@ -341,7 +351,26 @@ static void captureFormation(Word base, Record& out) {
     }
 }
 
+static void saveAdventureRecord(Word base, Object board, Word stars, bool assisted,
+                                bool synchronize = false) {
+    completed.stars = stars;
+    completed.checksum = AdventureRecords::digest(completed);
+    hasCompleted = AdventureRecords::valid(completed, completed.owner, completed.day, stars);
+    if (!hasCompleted) return;
+    const bool haveBest = !synchronize && readBest(base, completed.owner, completed.day, stars, prior, assisted);
+    const bool saved = (!haveBest || completed.elapsedMs < prior.elapsedMs) && writeBest(base, completed, assisted);
+    native<int>(base, 0x147adc, 4, "AsterAdventure",
+        "clear level=%s stars=%u time_ms=%u plants=%u best_saved=%u assisted=%u",
+        field<const char*>(board, 0xc4), stars, completed.elapsedMs, completed.count,
+        Word(saved), Word(assisted));
+    if (assisted) hasCompleted = false;
+}
+
 extern "C" void asterAdventureWin(Word base, Object board) {
+#ifdef ASTER_SOCIAL_LEVELS
+    const bool multi = activeMultiStar(board);
+    if (multi && !evaluateMultiStar(board)) return;
+#endif
     if (!sameRun(base, board) || !playing(board)) return;
     Object store = ownerStore(base);
     if (native<Object>(base, 0x7a98dc, store) != current.profile) return;
@@ -379,22 +408,19 @@ extern "C" void asterAdventureWin(Word base, Object board) {
         }
 #endif
     }
-    completed.checksum = AdventureRecords::digest(completed);
-    hasCompleted = AdventureRecords::valid(completed, current.owner, current.day, current.stars);
-    if (!hasCompleted) return;
-
 #ifdef ASTER_WSA_BATTLE_TOOLS
     const bool assisted = current.assisted;
 #else
     constexpr bool assisted = false;
 #endif
-    bool haveBest = readBest(base, current.owner, current.day, current.stars, prior, assisted);
-    bool saved = (!haveBest || completed.elapsedMs < prior.elapsedMs) && writeBest(base, completed, assisted);
-    native<int>(base, 0x147adc, 4, "AsterAdventure",
-        "clear level=%s stars=%u time_ms=%u plants=%u best_saved=%u assisted=%u",
-        field<const char*>(board, 0xc4), completed.stars, completed.elapsedMs, completed.count,
-        Word(saved), Word(assisted));
-    if (assisted) hasCompleted = false;
+#ifdef ASTER_SOCIAL_LEVELS
+    if (multi) {
+        pendingMultiRecord = board;
+        pendingRecordAssisted = assisted;
+        return;
+    }
+#endif
+    saveAdventureRecord(base, board, current.stars, assisted);
 }
 
 extern "C" const Record* asterAdventureLast(Word base) {

@@ -53,11 +53,13 @@ struct LevelMenu {
     const AdventureRecords::LevelInfo* level;
     Word action;
     Word stars;
+    Word chosenStars;
     Word page;
     Word watch;
     Word selectedScore;
     Word earnedStars;
     bool unlocked;
+    bool multiselect;
     Word bestTimes[4];
     Word scoreCount;
     FriendScore scores[maxFriendScores];
@@ -378,6 +380,10 @@ static void addScoreRow(Word base, Word rank, Word action, const char32_t* name,
     makeText(base, row.time, label);
 }
 
+static bool conflictingStars(const AdventureRecords::LevelInfo& level, Word mask) {
+    return (level.conflicts & (1U << mask)) != 0;
+}
+
 static bool showMenu(Word base) {
     Object app = gameApp(base);
     if (!app || !menu.level) return false;
@@ -394,12 +400,14 @@ static bool showMenu(Word base) {
     }
 
     makeText(base, menu.headings[0], AdventureRecords::levelTexts + level.title);
-    makeText(base, menu.headings[1], U"过关条件");
+    makeText(base, menu.headings[1], menu.multiselect ? U"过关条件 · 可复选" : U"过关条件");
     const char32_t* goals = AdventureRecords::levelTexts + level.goals[menu.stars];
     if (!menu.unlocked) {
         goals = level.unlocks[0][0] ? U"领取本世界的三星罐头\n解锁星级挑战"
                                    : U"完成本关主线解锁星级挑战";
     }
+    const bool conflict = conflictingStars(level, menu.chosenStars);
+    if (conflict) goals = U"植物数量上限与存活要求冲突\n请选择其他组合";
     makeText(base, menu.headings[2], goals);
     makeText(base, menu.headings[3], U"我的成绩");
     makeText(base, menu.headings[5], U"好友成绩");
@@ -430,7 +438,7 @@ static bool showMenu(Word base) {
 
     static constexpr char32_t tabs[][4] = {U"无星", U"第一星", U"第二星", U"第三星"};
     for (Word i = level.stars == 1 ? 1 : 0; i <= level.stars; ++i) {
-        const bool selected = i == menu.stars;
+        const bool selected = i ? (menu.chosenStars & starBit(i)) != 0 : !menu.chosenStars;
         const bool locked = i && !menu.unlocked;
         MenuArt skin = locked ? (selected ? LockedTabPressed : LockedTab)
                               : (selected ? ActiveTab : InactiveTab);
@@ -456,7 +464,7 @@ static bool showMenu(Word base) {
         addMenuButton(base, U"查看阵型", WatchFormation, (scoresPanelWidth - footerButtonWidth) / 2, 317,
                       footerButtonWidth, footerButtonHeight, true, ViewButton, ViewButtonPressed);
     }
-    if (!menu.stars || menu.unlocked) {
+    if (!conflict && (!menu.chosenStars || menu.unlocked)) {
         addMenuButton(base, U"进入游戏", Enter, (challengePanelLeft + menuWidth - footerButtonWidth) / 2, 317,
                       footerButtonWidth, footerButtonHeight, true);
     }
@@ -549,8 +557,9 @@ static void renderMenu(Word base, Object dialog, Object graphics) {
         native<void>(base, 0x116a268, graphics, image, matrix);
     }
 #ifdef ASTER_SOCIAL_ART
-    drawImage(GoalLineLeft, {286, 109, 138, 21});
-    drawImage(GoalLineRight, {574, 109, 138, 21});
+    const int divider = menu.multiselect ? 105 : 138;
+    drawImage(GoalLineLeft, {286, 109, divider, 21});
+    drawImage(GoalLineRight, {712 - divider, 109, divider, 21});
 #endif
 
     for (Word i = 0; i < menu.scoreRowCount; ++i) {

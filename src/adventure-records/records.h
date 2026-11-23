@@ -59,6 +59,7 @@ struct LevelInfo {
     unsigned title;
     unsigned goals[4];
     char unlocks[2][32];
+    unsigned char conflicts;
 };
 
 #include "adventure_levels.inc"

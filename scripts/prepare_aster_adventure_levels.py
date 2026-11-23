@@ -148,6 +148,19 @@ def objective(obj, strings):
     return GOALS[kind].format(**data)
 
 
+def conflicting_star_masks(tiers):
+    conflicts = 0
+    for mask in range(1, 1 << len(tiers)):
+        goals = [goal for i, tier in enumerate(tiers) if mask & (1 << i) for goal in tier]
+        maximum = min((g["objdata"]["MaximumPlants"] for g in goals
+                       if g["objclass"] == "StarChallengeSimultaneousPlantsProps"), default=999)
+        minimum = max((g["objdata"]["Count"] for g in goals
+                       if g["objclass"] == "StarChallengePlantsSurviveProps"), default=0)
+        if minimum > maximum:
+            conflicts |= 1 << mask
+    return conflicts
+
+
 def collect_levels(documents, strings):
     shared = keyed(documents[MODULES]["objects"])
     catalog = {}
@@ -200,9 +213,11 @@ def collect_levels(documents, strings):
             if key in ids or not re.fullmatch(r"[a-z0-9_]{1,47}", alias):
                 raise ValueError(f"Invalid or duplicate adventure level key for {alias}")
             ids.add(key)
+            objectives = [[resolve(ref) for ref in tier] for tier in tiers]
             catalog[alias] = dict(
                 key=key, title=title,
-                goals=[MAIN_GOAL, *["\n".join(objective(resolve(ref), strings) for ref in tier) for tier in tiers]],
+                goals=[MAIN_GOAL, *["\n".join(objective(goal, strings) for goal in tier) for tier in objectives]],
+                conflicts=conflicting_star_masks(objectives),
                 unlocks=unlocks,
                 always=star_module.get("ChallengesAlwaysAvailable", False),
                 formation=formation,
@@ -238,7 +253,8 @@ def make_catalog(apk, output):
                     f'{str(entry["always"]).lower()}, {str(entry["formation"]).lower()}, '
                     f'{entry["plank_rows"]}, {title}, '
                     + "{" + ", ".join(map(str, conditions)) + "}, "
-                    + "{" + ", ".join(map(json.dumps, unlocks)) + "}},")
+                    + "{" + ", ".join(map(json.dumps, unlocks)) + "}, "
+                    + f'{entry["conflicts"]}}},')
         java_levels[alias] = [entry["key"], len(goals) - 1, entry["formation"]]
     (output / "adventure_levels.inc").write_text(
         "static constexpr char32_t levelTexts[] =\n    " + "\n    ".join(texts) + ";\n"

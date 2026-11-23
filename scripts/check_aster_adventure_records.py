@@ -115,7 +115,7 @@ class Game:
     def string(self, addr):
         return bytes(self.arm.mem_read(addr, 128)).split(b"\0", 1)[0].decode("ascii")
 
-    def execute(self, where, *args, return_from_call=False, r4=0, r5=0):
+    def execute(self, where, *args, return_from_call=False, r4=0, r5=0, instruction_limit=150_000):
         from unicorn.arm_const import UC_ARM_REG_R4, UC_ARM_REG_R5
         if isinstance(where, str):
             where = self.symbols[where]
@@ -127,7 +127,7 @@ class Game:
             self.arm.reg_write(reg, value)
         if return_from_call:
             self.arm.hook_add(UC_HOOK_CODE, self.stop, begin=BASE + where + 4, end=BASE + where + 4)
-        self.arm.emu_start(BASE + where, RETURN, count=150_000)
+        self.arm.emu_start(BASE + where, RETURN, count=instruction_limit)
         assert self.arm.reg_read(UC_ARM_REG_SP) == STACK
         return self.arm.reg_read(UC_ARM_REG_R0)
 

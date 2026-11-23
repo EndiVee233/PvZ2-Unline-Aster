@@ -59,8 +59,10 @@ final class AdventureFriendFiles {
     private static final String RAW = "https://raw.githubusercontent.com/" + REPOSITORY
             + "/main/" + DIRECTORY + "/";
     private static final String UUID_PATTERN = "[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}";
-    private static final Pattern PLAYER_FILE =
+    private static final Pattern LEGACY_PLAYER_FILE =
             Pattern.compile("player-(" + UUID_PATTERN + ")(?: ?\\([1-9][0-9]{0,5}\\))?\\.json");
+    private static final Pattern WINDOWS_DEVICE_NAME =
+            Pattern.compile("(?i)(?:CON|PRN|AUX|NUL|CONIN\\$|CONOUT\\$|COM[1-9¹²³]|LPT[1-9¹²³])(?:\\..*)?");
     private static final ExecutorService EXPORTS = Executors.newSingleThreadExecutor();
     private static final ExecutorService SYNC = Executors.newSingleThreadExecutor();
     private static volatile JSONArray community = new JSONArray();
@@ -73,12 +75,21 @@ final class AdventureFriendFiles {
 
     private static final class Export {
         final String id;
+        final String filename;
         final byte[] data;
 
-        Export(String id, byte[] data) {
+        Export(String id, String name, byte[] data) {
             this.id = id;
+            this.filename = playerFilename(name);
             this.data = data;
         }
+    }
+
+    static String playerFilename(String name) {
+        String stem = name.replaceAll("[<>:\"/\\\\|?*]", "_").replaceAll("[ .]+$", "");
+        if (stem.isEmpty()) stem = "玩家";
+        if (WINDOWS_DEVICE_NAME.matcher(stem).matches()) stem = "_" + stem;
+        return stem + ".json";
     }
 
     static byte[] read(InputStream in, int max) throws IOException {
@@ -124,17 +135,17 @@ final class AdventureFriendFiles {
                 int owner = header.getInt();
                 if (owner == -1) throw new IOException("Player not selected");
                 String id = exportIdentity(activity, owner);
-                byte[] data = createExport(raw, id, levels, new File(activity.getFilesDir(), "userdata"));
-                Export export = new Export(id, data);
+                Export export = createExport(raw, id, levels, new File(activity.getFilesDir(), "userdata"));
                 SharedPreferences files = destinations(activity);
                 String destination = files.getString(id, "");
-                if (!destination.isEmpty()) {
+                // Saved destinations from UUID-named exports have no recorded title.
+                if (!destination.isEmpty() && export.filename.equals(files.getString(id + ".filename", ""))) {
                     try {
                         writeExport(activity, Uri.parse(destination), export);
                         activity.runOnUiThread(() -> finishExport(activity, "已更新导出的玩家数据"));
                         return;
                     } catch (IOException | SecurityException unavailable) {
-                        files.edit().remove(id).apply();
+                        files.edit().remove(id).remove(id + ".filename").apply();
                     }
                 }
                 activity.runOnUiThread(() -> openDocument(activity, export));
@@ -145,7 +156,7 @@ final class AdventureFriendFiles {
         });
     }
 
-    static byte[] createExport(byte[] raw, String id, JSONObject levels, File records)
+    private static Export createExport(byte[] raw, String id, JSONObject levels, File records)
             throws IOException, JSONException {
         ByteBuffer header = ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN);
         if (raw.length != EXPORT_SIZE || header.getInt() != 1 || !id.matches(UUID_PATTERN)) {
@@ -205,7 +216,7 @@ final class AdventureFriendFiles {
         if (avatar >= AdventureSocial.LEGACY_AVATAR_COUNT) result.put("avatarIndex", avatar);
         byte[] encoded = (result.toString() + "\n").getBytes(StandardCharsets.UTF_8);
         if (encoded.length > MAX_EXPORT_BYTES) throw new IOException("Export exceeds file limit");
-        return encoded;
+        return new Export(id, name, encoded);
     }
 
     private static String recordName(String prefix, AdventureFormationRecord record) {
@@ -252,7 +263,7 @@ final class AdventureFriendFiles {
         if (activity.isFinishing() || activity.isDestroyed()) return;
         pendingExport = export;
         Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
-                .setType("application/json").putExtra(Intent.EXTRA_TITLE, "player-" + export.id + ".json");
+                .setType("application/json").putExtra(Intent.EXTRA_TITLE, export.filename);
         try {
             activity.startActivityForResult(intent, SAVE_DOCUMENT);
         } catch (RuntimeException error) {
@@ -278,7 +289,8 @@ final class AdventureFriendFiles {
                 writeExport(activity, destination, export);
                 try {
                     activity.getContentResolver().takePersistableUriPermission(destination, Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
-                    destinations(activity).edit().putString(export.id, destination.toString()).apply();
+                    destinations(activity).edit().putString(export.id, destination.toString())
+                            .putString(export.id + ".filename", export.filename).apply();
                 } catch (SecurityException ignored) {
                     // Some providers grant access only for this save operation.
                 }
@@ -377,47 +389,56 @@ final class AdventureFriendFiles {
         Map<String, JSONObject> old = new HashMap<>();
         for (int i = 0; i < cached.length(); ++i) {
             JSONObject player = cached.getJSONObject(i);
-            old.put(player.getString("playerId"), player);
+            old.put(player.optString("blob"), player);
         }
+        ArrayList<JSONObject> files = new ArrayList<>();
+        for (int i = 0; i < listing.length(); ++i) files.add(listing.getJSONObject(i));
+        // Prefer a player-named file if the previous UUID-named copy is still present.
+        files.sort(Comparator.comparing(row -> LEGACY_PLAYER_FILE.matcher(row.optString("name")).matches()));
         JSONArray updated = new JSONArray();
         Set<String> included = new HashSet<>();
         int size = 2;
-        for (int i = 0; i < listing.length() && updated.length() < MAX_FRIENDS; ++i) {
-            JSONObject row = listing.getJSONObject(i);
+        for (JSONObject row : files) {
+            if (updated.length() >= MAX_FRIENDS) break;
             String name = row.optString("name");
             String sha = row.optString("sha");
             int bytes = row.optInt("size", -1);
-            Matcher filename = PLAYER_FILE.matcher(name);
-            if (!"file".equals(row.optString("type")) || !filename.matches()
+            if (!"file".equals(row.optString("type")) || !name.endsWith(".json") || name.length() <= 5
+                    || name.indexOf('/') >= 0 || name.indexOf('\\') >= 0
                     || !sha.matches("[0-9a-f]{40}") || bytes < 1 || bytes > MAX_EXPORT_BYTES) continue;
-            String id = filename.group(1);
-            if (included.contains(id)) continue;
-            JSONObject player = old.get(id);
-            if (player == null || !sha.equals(player.optString("blob"))) {
-                byte[] data = fetch(RAW + name.replace(" ", "%20"), MAX_EXPORT_BYTES);
+            Matcher filename = LEGACY_PLAYER_FILE.matcher(name);
+            String legacyId = filename.matches() ? filename.group(1) : null;
+            if (legacyId != null && included.contains(legacyId)) continue;
+            if (size + bytes + 128 > MAX_CATALOG_BYTES) continue;
+            JSONObject player = old.get(sha);
+            if (player == null) {
+                byte[] data = fetch(RAW + Uri.encode(name), MAX_EXPORT_BYTES);
                 if (data.length != bytes || !sha.equals(blobSha(data))) throw new IOException("GitHub file changed during sync");
                 try {
-                    player = parsePlayer(data, id, levels).put("blob", sha);
+                    player = parsePlayer(data, legacyId, levels).put("blob", sha);
                 } catch (IOException | JSONException invalid) {
                     Log.i("AsterSocial", "Skipped invalid community profile " + name);
                     continue;
                 }
             }
-            if (size + bytes + 128 > MAX_CATALOG_BYTES) continue;
+            String id = player.getString("playerId");
+            if ((legacyId != null && !legacyId.equals(id)) || !included.add(id)) continue;
             size += bytes + 128;
-            included.add(id);
             updated.put(player);
         }
         return updated;
     }
 
-    static JSONObject parsePlayer(byte[] raw, String id, JSONObject levels) throws IOException, JSONException {
+    static JSONObject parsePlayer(byte[] raw, String legacyId, JSONObject levels) throws IOException, JSONException {
         Object value = json(raw);
         if (!(value instanceof JSONObject)) throw new IOException("Expected one player per file");
         JSONObject player = (JSONObject) value;
-        if (!id.matches(UUID_PATTERN) || !id.equals(player.get("playerId")) || !FORMAT.equals(player.get("format"))) {
+        Object playerId = player.get("playerId");
+        if (!(playerId instanceof String) || !((String) playerId).matches(UUID_PATTERN)
+                || (legacyId != null && !legacyId.equals(playerId)) || !FORMAT.equals(player.get("format"))) {
             throw new IOException("Player ID or file format mismatch");
         }
+        String id = (String) playerId;
         AdventureSocial.integer(player, "version", 1, 1);
         if (!(player.get("name") instanceof String)) throw new IOException("Invalid nickname");
         String name = PvpPresetDocument.validName(player.getString("name"));

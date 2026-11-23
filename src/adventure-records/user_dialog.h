@@ -40,7 +40,7 @@ struct UserDialog {
     struct Choice { Word index, tier; } available[userPlantCount];
     ButtonSkin portraits[friendAvatarCount];
     ButtonSkin packets[4];
-    ButtonSkin mapSkin, mapPressed, friendSkin, friendDown;
+    ButtonSkin mapSkin, mapPressed;
     const char32_t* friendCaption;
     const char32_t* signCaption;
     const char* signName;
@@ -661,8 +661,6 @@ static void updateUserDialog(Word base) {
         changeMenuGroup(base, app, 2U, true);
         resolveMenuSkin(base, user.mapSkin, "IMAGE_ASTER_SOCIAL_USER_BUTTON", 2U);
         resolveMenuSkin(base, user.mapPressed, "IMAGE_ASTER_SOCIAL_USER_BUTTON_DOWN", 2U);
-        resolveMenuSkin(base, user.friendSkin, "IMAGE_UI_HUD_WORLDMAP_DAILY_SIGN_REWARD", 2U);
-        resolveMenuSkin(base, user.friendDown, "IMAGE_UI_HUD_WORLDMAP_DAILY_SGIN_REWARD_DOWN", 2U);
         if (!user.friendCaption) makeText(base, user.friendCaption, U"好友");
         static constexpr char artKeys[CnArtCount][44] = {
             "", "IMAGE_ASTER_SOCIAL_CN_USER_FRAME", "IMAGE_ASTER_SOCIAL_CN_USER_DAVE",
@@ -836,12 +834,21 @@ static MenuRect userMapSkinBounds(Object sprite, MenuRect box, bool alignLeft, i
             int(field<int>(sprite, 0x2c) * placement.scale + 0.5f)};
 }
 
+static Object friendMapImage(Word base, bool pressed) {
+    // The world-map resource group can be unloaded while a level is open.
+    ButtonSkin skin;
+    resolveMenuSkin(base, skin, pressed ? "IMAGE_UI_HUD_WORLDMAP_DAILY_SGIN_REWARD_DOWN" :
+                                         "IMAGE_UI_HUD_WORLDMAP_DAILY_SIGN_REWARD", 2U);
+    if (pressed && !skin.image) resolveMenuSkin(base, skin, "IMAGE_UI_HUD_WORLDMAP_DAILY_SIGN_REWARD", 2U);
+    return skin.image;
+}
+
 extern "C" bool asterUserHit(Word base, Object widget, int x, int y) {
     if (!widget || (widget != user.widget && widget != user.friendWidget) || !userMapVisible(base) ||
         !native<bool>(base, 0x97680c, widget, x, y)) return false;
     const bool friends = widget == user.friendWidget;
     const auto box = userMapWidgetBounds(widget);
-    const auto skin = userMapSkinBounds(friends ? user.friendSkin.image : user.mapSkin.image, box,
+    const auto skin = userMapSkinBounds(friends ? friendMapImage(base, false) : user.mapSkin.image, box,
                                         !friends && userHasCnArt(), box.height / 10);
     return x >= skin.x && x < skin.x + skin.width && y >= skin.y && y < skin.y + skin.height;
 }
@@ -896,9 +903,10 @@ extern "C" void asterUserDraw(Word base, Object widget, Object graphics) {
     const auto box = userMapWidgetBounds(widget);
     if (box.width < 10 || box.height < 10) return;
     if (widget == user.friendWidget) {
+        const auto sprite = friendMapImage(base, user.friendPressed);
+        if (!sprite) return;
         const auto tint = field<unsigned char>(graphics, 0x64);
         native<void>(base, 0x1166e74, graphics, false);
-        const auto sprite = user.friendPressed && user.friendDown.image ? user.friendDown.image : user.friendSkin.image;
         const auto button = userMapSkinBounds(sprite, box, false, box.height / 10);
         userSkinImage(base, graphics, sprite, button);
         drawMapCaption(base, graphics, button, user.friendCaption, user.friendPressed);

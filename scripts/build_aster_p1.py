@@ -1,4 +1,4 @@
-"""Build A308 with P1 PvP changes on the accepted A305 ARM32 guest."""
+"""Build Aster's PvP updates on the accepted A305 ARM32 guest."""
 import argparse
 from hashlib import sha256
 from io import BytesIO
@@ -152,16 +152,16 @@ def patch_native(native, sdk, headers, prior, p0, output):
     return result
 
 
-def build(base, sdk, headers, prior, p0, output, signing):
+def build(base, sdk, headers, prior, p0, output, signing, version):
     output.mkdir(parents=True, exist_ok=True)
     with ZipFile(base) as apk:
         engine = patch_native(apk.read(ENGINE), sdk, headers, prior, p0, output)
-        manifest = manifest_version(apk.read("AndroidManifest.xml"), 308, 305, prefix="A")
+        manifest = manifest_version(apk.read("AndroidManifest.xml"), version, 305, prefix="A")
     (output / "libSrc.so").write_bytes(engine)
     (output / "generated").mkdir(exist_ok=True)
     copyfile(headers / "exchange-presets.json", output / "generated/exchange-presets.json")
     if signing:
-        final = output / "PvZ2-Unline-Aster-A308-ARM32-WSA-existing-data.apk"
+        final = output / f"PvZ2-Unline-Aster-A{version}-ARM32-WSA-existing-data.apk"
         pack_apk(base, {ENGINE: engine, "AndroidManifest.xml": manifest}, sdk, final, signing)
         print(final)
 
@@ -171,4 +171,5 @@ if __name__ == "__main__":
     for name in ("base", "sdk", "headers", "prior", "p0", "output"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--signing", type=Path)
+    parser.add_argument("--version", type=int, default=308)
     build(**vars(parser.parse_args()))

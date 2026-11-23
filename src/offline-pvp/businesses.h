@@ -3,15 +3,14 @@
 enum class BusinessKind { HotDog, Store };
 struct BusinessRules {
  U attackFee,coinCapacity,medalCapacity,coinRate,medalRate;
- U threeStarCoins,defender;
+ U threeStarCoins;
  char terrain[20];
 };
 struct BusinessPlot {U id,zone,position;BusinessKind kind;BusinessRules rules;};
-// Aster's local values. Old footage with occupied, leveled shops cannot
-// establish an empty shop's inventory, base production, or default defense.
+// Aster's local economy and terrain. Historical footage shows occupied shops.
 static const BusinessPlot BUSINESSES[]={
- {0x71000001,3,2,BusinessKind::HotDog,{1,2000,2000,40,20,300,2,"arena_battle_test"}},
- {0x71000002,3,3,BusinessKind::Store,{1,2000,2000,40,20,300,6,"arena_battle_test"}}
+ {0x71000001,3,2,BusinessKind::HotDog,{1,2000,2000,40,20,300,"arena_battle_test"}},
+ {0x71000002,3,3,BusinessKind::Store,{1,2000,2000,40,20,300,"arena_battle_test"}}
 };
 static const char32_t* businessName(const BusinessPlot& plot){
  return plot.kind==BusinessKind::HotDog?U"热狗店":U"商店";

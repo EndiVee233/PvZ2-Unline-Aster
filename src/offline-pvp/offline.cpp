@@ -446,10 +446,44 @@ static void apply(U b,P d,const Store&s){
 }
 #ifdef PVP_BUSINESS_SCOUT
 static void initialBusinessFormation(U b,const BusinessPlot&s,Store&formation){
- formation=Store{};formation.user=owner(b);formation.positions=5;formation.infos=1;
- U plant=s.rules.defender;
- for(U row=0;row<5;++row)formation.pos[row]={plant,row,0};
- formation.info[0].type=plant;formation.info[0].level=1;
+ // Native PlantType IDs. The plant choices come from the old shop footage;
+ // these coordinates are Aster's layouts on its existing arena.
+ enum : U {
+  Peashooter=2,WallNut=3,TallNut=4,BonkChoy=5,MelonPult=7,
+  Snapdragon=15,Spikeweed=16,SpringBean=20,SnowPea=21,Bloomerang=27,
+  Radish=42,HeavenlyPeach=43,BambooShoot=45
+ };
+ static constexpr Pos hotDog[]={
+  {SnowPea,0,0},{SpringBean,0,4},{Spikeweed,0,5},
+  {Peashooter,1,1},{Snapdragon,1,2},{WallNut,1,4},
+  {SpringBean,2,4},{Spikeweed,2,5},
+  {Peashooter,3,0},{Snapdragon,3,2},{TallNut,3,4},
+  {Peashooter,4,1},{WallNut,4,4}
+ };
+ // The western coffee-house footage supplies a second mix for Aster's STORE.
+ static constexpr Pos store[]={
+  {HeavenlyPeach,0,1},{Bloomerang,0,2},{Peashooter,0,3},{Radish,0,5},
+  {SnowPea,1,0},{BambooShoot,1,3},{BonkChoy,1,4},{Radish,1,5},
+  {MelonPult,2,0},{HeavenlyPeach,2,1},{SnowPea,2,2},{BonkChoy,2,4},{Radish,2,5},
+  {SnowPea,3,0},{BambooShoot,3,3},{BonkChoy,3,4},{Radish,3,5},
+  {MelonPult,4,0},{HeavenlyPeach,4,1},{Bloomerang,4,2},{Radish,4,5}
+ };
+ const bool hot=s.kind==BusinessKind::HotDog;
+ const Pos* positions=hot?hotDog:store;
+ formation=Store{};
+ formation.user=owner(b);
+ formation.positions=hot?sizeof(hotDog)/sizeof(Pos):sizeof(store)/sizeof(Pos);
+ for(U i=0;i<formation.positions;++i){
+  const Pos& pos=positions[i];
+  formation.pos[i]=pos;
+  U type=0;
+  while(type<formation.infos&&formation.info[type].type!=pos.type)++type;
+  if(type==formation.infos){
+   formation.info[type].type=pos.type;
+   formation.info[type].level=1;
+   ++formation.infos;
+  }
+ }
 }
 #endif
 static U arenaDaveRound;
@@ -819,14 +853,12 @@ static bool scoutBusiness(U b,const BusinessPlot&s,bool attack){
  at<U>(m,0xa8)=2;at<U>(m,0xf4)=s.id;at<U>(m,0xf8)=s.position;at<U>(m,0xfc)=s.zone;at<U>(m,0x104)=s.id;
  at<unsigned char>(m,0x100)=attack?0:1;
  at<unsigned char>(m,0x101)=at<unsigned char>(m,0x102)=at<unsigned char>(m,0x103)=0;
- // Independent local neutral defenses, not recovered server formations.
- // The two shops deliberately differ to expose stale-board/stacking bugs.
- Store formation{};initialBusinessFormation(b,s,formation);U plant=formation.info[0].type;
+ Store formation{};initialBusinessFormation(b,s,formation);
 #ifdef PVP_SILENT_RAIDS
  I saved=readGarrison(b,s.id,formation);if(saved<0)return false;
 #endif
  apply(b,m+0x80,formation);arenaNpc=s.id;arenaUser=owner(b);
- loadArena(b,m,s.rules.terrain,0);log(b,"business-scout",s.id,plant);return true;
+ loadArena(b,m,s.rules.terrain,0);log(b,"business-scout",s.id,formation.positions);return true;
 }
 #endif
 #ifdef PVP_BUSINESS_BATTLE

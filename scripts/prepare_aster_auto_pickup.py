@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def patch_native(native, ndk, output, *, world_resources=False, mount_campaign=False,
                  guard_chooser_resume=False, offline_sign_in=False, refresh_sign_in=False,
-                 sign_in_hooks=None, four_column_sign_in=False):
+                 sign_in_hooks=None, four_column_sign_in=False, stock_sign_in_style=False):
     if refresh_sign_in and (not offline_sign_in or world_resources or mount_campaign or guard_chooser_resume):
         raise ValueError("Refreshing sign-in reuses the installed HUD and world patches")
     output.mkdir(parents=True, exist_ok=True)
@@ -40,8 +40,9 @@ def patch_native(native, ndk, output, *, world_resources=False, mount_campaign=F
                         "-o", obj], check=True)
         objects.append(obj)
     if offline_sign_in:
+        sign_flags = flags + (["-DASTER_SIGN_IN_STOCK_LAYOUT"] if stock_sign_in_style else [])
         sign = output / "daily-sign-in.o"
-        subprocess.run([tools / "clang++.exe", *flags, "-c", ROOT / "src/daily-sign-in/daily_sign_in.cpp",
+        subprocess.run([tools / "clang++.exe", *sign_flags, "-c", ROOT / "src/daily-sign-in/daily_sign_in.cpp",
                         "-o", sign], check=True)
         objects.append(sign)
     for item in objects:
@@ -361,6 +362,36 @@ SECTIONS {{
             {get_base}
             b #{symbols['asterDailySignMakeupClick']}
         """)
+        if stock_sign_in_style:
+            # Use the original footer's bubble and RichText with the saved count.
+            wrap(0xf62384, 0xe59630b0, f"""
+                push {{r0-r2,r4,ip,lr}}
+                bl #{symbols["asterDailySignCount"]}
+                mov r3,r0
+                pop {{r0-r2,r4,ip,lr}}
+                b #0xf62388
+            """)
+            # The stock widget's opening-time flag can stay on the previous tile after makeup.
+            wrap(0xf6277c, 0xe5d430e2, f"""
+                push {{r0-r2,r4,ip,lr}}
+                mov r0,r4
+                bl #{symbols["asterDailySignHighlight"]}
+                mov r3,r0
+                pop {{r0-r2,r4,ip,lr}}
+                b #0xf62780
+            """)
+            # Only the stock card background uses these coordinates.
+            wrap(0xf627fc, struct.unpack("<I", branch(0xf627fc, 0x11694c8, True))[0], f"""
+                push {{r4,lr}}
+                push {{r2,r3}}
+                mov r3,r4
+                mov r2,r1
+                mov r1,r0
+                {get_base}
+                bl #{symbols["asterDailySignCard"]}
+                add sp,sp,#8
+                pop {{r4,pc}}
+            """, True)
         if four_column_sign_in:
             # Allow for the native scroll widget's left inset when centering the grid.
             wrap(0xf64b14, 0xe0888108, """

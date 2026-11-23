@@ -36,6 +36,7 @@ def read_string(emu, address):
 
 
 def verify(engine, report, base, pool, plants):
+    classic = "asterDailySignCount" in report["symbols"]
     emu = Uc(UC_ARCH_ARM, UC_MODE_ARM)
     emu.reg_write(UC_ARM_REG_FPEXC, 1 << 30)
     emu.mem_map(base, 0x2000000)
@@ -55,6 +56,8 @@ def verify(engine, report, base, pool, plants):
     awards = []
     draw_calls = []
     image_keys = []
+    tint_depth = 0
+    card_calls = []
     checkmark, reward_image = STACK + 0x9000, STACK + 0x9100
     small_font = STACK + 0x9200
     write_word(emu, APP + 0x2c0, small_font)
@@ -120,6 +123,7 @@ def verify(engine, report, base, pool, plants):
             raise AssertionError(award)
 
     def intercept(uc, address, _size, _data):
+        nonlocal tint_depth
         site = address - base
         arg = uc.reg_read(UC_ARM_REG_R0)
         if site == 0x147824:
@@ -200,16 +204,30 @@ def verify(engine, report, base, pool, plants):
             assert arg == active and uc.mem_read(MANAGER + 0x81, 1) == b"\0"
             paid_saves.append(read_word(uc, active + 0x3a0))
             result = 0
+        elif classic and site in (0x116d800, 0x1166e74, 0x1166c30, 0x116d764, 0x11694c8):
+            if site == 0x116d800:
+                tint_depth += 1
+            elif site == 0x116d764:
+                tint_depth -= 1
+                assert tint_depth >= 0
+            elif site == 0x11694c8:
+                assert (uc.reg_read(UC_ARM_REG_R2), uc.reg_read(UC_ARM_REG_R3)) == (13, 27)
+                card_calls.append(tint_depth)
+            else:
+                assert tint_depth == 1
+            result = 0
         elif site == 0x11698b4:
             image = uc.reg_read(UC_ARM_REG_R1)
             x, y = (uc.reg_read(reg) for reg in (UC_ARM_REG_R2, UC_ARM_REG_R3))
             width, height = struct.unpack("<2I", uc.mem_read(uc.reg_read(UC_ARM_REG_SP), 8))
             if image == checkmark:
-                assert (x, y, width, height) == (31, 67, 49, 38)
+                assert (x, y, width, height) == ((36, 61, 39, 30) if classic else (31, 67, 49, 38))
+                assert tint_depth == 0
                 draw_calls.append("checkmark")
             else:
                 assert image == reward_image
-                assert (x, y, width, height) in ((29, 28, 52, 52), (37, 43, 36, 36))
+                bounds = ((25, 30, 61, 61), (34, 45, 42, 42)) if classic else ((29, 28, 52, 52), (37, 43, 36, 36))
+                assert (x, y, width, height) in bounds
                 draw_calls.append("reward image")
             result = 0
         elif site in (0x708e18, 0x708890, 0x706da0):
@@ -259,12 +277,13 @@ def verify(engine, report, base, pool, plants):
 
     emu.hook_add(UC_HOOK_CODE, intercept)
 
-    def run(offset, arg=0, second=0, third=0):
+    def run(offset, arg=0, second=0, third=0, fourth=0):
         emu.reg_write(UC_ARM_REG_SP, STACK + 0x8000)
         emu.reg_write(UC_ARM_REG_LR, RETURN)
         emu.reg_write(UC_ARM_REG_R0, arg)
         emu.reg_write(UC_ARM_REG_R1, second)
         emu.reg_write(UC_ARM_REG_R2, third)
+        emu.reg_write(UC_ARM_REG_R3, fourth)
         emu.emu_start(base + offset, RETURN, count=10000)
         assert emu.reg_read(UC_ARM_REG_PC) in (RETURN, base + 0xf68f5c, base + 0xf69068)
         return emu.reg_read(UC_ARM_REG_R0)
@@ -328,7 +347,10 @@ def verify(engine, report, base, pool, plants):
             suffix = "LOTUSHOOTER" if award == "plant" and name == "lotusshower" else name.upper()
             if award == "material":
                 suffix += "_PIECE"
-            assert image_keys == [prefix + suffix], (item, image_keys)
+            art = [prefix + suffix]
+            if classic:
+                art.append("IMAGE_UI_SIGNREWARD_ITEM_2")
+            assert image_keys == art, (item, image_keys)
         else:
             assert not image_keys, (item, image_keys)
         write_word(emu, tile + 0xd8, slot - 1)
@@ -337,10 +359,21 @@ def verify(engine, report, base, pool, plants):
         draw_regs, draw_stack = OBJECTS + 0xa00, OBJECTS + 0xb00
         emu.mem_write(draw_regs, struct.pack("<IIffI", APP, 0, 0, 14, tile))
         emu.mem_write(draw_stack, struct.pack("<f4I", 110, tile + 0xc8, 1, 0, 0))
+        if classic:
+            # The footer's counter tracks the claimed prefix even when today is still open.
+            count = run(report["symbols"]["asterDailySignCount"])
+            assert claimed == (slot <= count)
+            assert run(report["symbols"]["asterDailySignHighlight"], tile) == int(slot == count + 1)
+            emu.reg_write(UC_ARM_REG_R4, tile)
+            run(report["hooks"][str(0xf627fc)], 0, reward_image, 13, 27)
+            assert card_calls.pop() == int(claimed)
         run(report["symbols"]["asterDailySignDraw"], base, draw_regs, draw_stack)
+        assert tint_depth == 0
         assert draw_calls[0] == "reward image"
         assert draw_calls[-1] == ("checkmark" if claimed else f"×{amount}"), (clock, draw_calls)
         lines = draw_calls[1:-2] if claimed else draw_calls[1:-1]
+        if classic:
+            item = item.removesuffix("碎片").removesuffix("整株")
         assert "".join(lines) == item, (clock, draw_calls)
         draw_calls.clear()
 

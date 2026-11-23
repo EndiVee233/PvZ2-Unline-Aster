@@ -266,6 +266,17 @@ extern "C" int asterDailySignCurrentSlot() {
     return slot < days ? slot : days;
 }
 
+#ifdef ASTER_SIGN_IN_STOCK_LAYOUT
+extern "C" int asterDailySignCount() {
+    return progress.count;
+}
+
+extern "C" bool asterDailySignHighlight(Object tile) {
+    const int index = field<int>(tile, 0xd8);
+    return calendar.begin && index == progress.count && index < calendar.end - calendar.begin;
+}
+#endif
+
 static char32_t* writeLabel(char32_t* target, const char32_t* prefix, unsigned amount) {
     while (*prefix) *target++ = *prefix++;
     unsigned digits[5];
@@ -324,6 +335,12 @@ extern "C" void asterDailySignTile(Address base, Object tile, const Reward* rewa
             : rewardImage(base, costume ? item.costumeIcon : item.icon);
         if (image) field<Object>(tile, 0xa4) = image;
     }
+#ifdef ASTER_SIGN_IN_STOCK_LAYOUT
+    if (day.kind != Kind::Coins && day.kind != Kind::WorldKey && day.kind != Kind::Diamonds) {
+        if (const auto background = rewardImage(base, "IMAGE_UI_SIGNREWARD_ITEM_2"))
+            field<Object>(tile, 0xa8) = background;
+    }
+#endif
     if (index + 1 == asterDailySignCurrentSlot())
         claimMark = rewardImage(base, claimMarkKey);
     char32_t text[24];
@@ -332,10 +349,20 @@ extern "C" void asterDailySignTile(Address base, Object tile, const Reward* rewa
         char32_t* name = text;
         for (const auto* c = item.name; *c; ++c) *name++ = *c;
         char32_t* split = name;
+#ifdef ASTER_SIGN_IN_STOCK_LAYOUT
+        // The original cards use short names and let the artwork distinguish fragments.
+        if (day.kind == Kind::AccessoryShard) {
+            constexpr char32_t ending[] = U"碎片";
+            if (name - text > 2 && name[-2] == ending[0] && name[-1] == ending[1]) name -= 2;
+        }
+        const char32_t* suffix = day.kind == Kind::Costume || day.kind == Kind::CostumeShard ? U"装扮" : U"";
+#else
         static constexpr char32_t suffixes[][5] = {
             U"", U"", U"", U"整株", U"碎片", U"装扮", U"装扮碎片", U"", U"",
         };
         const char32_t* suffix = suffixes[unsigned(day.kind)];
+#endif
+        split = name;
         while (*suffix) *name++ = *suffix++;
         *name = 0;
         makeLabel(base, &labels.title, text);
@@ -401,6 +428,23 @@ static void fitTitle(Address base, TileLabels& labels, Object stockFont, int wid
     labels.fittedFont = font;
 }
 
+#ifdef ASTER_SIGN_IN_STOCK_LAYOUT
+static void beginClaimedTint(Address base, Object graphics) {
+    const unsigned color[] = {145, 145, 145, 255};
+    native<void>(base, 0x116d800, graphics);
+    native<void>(base, 0x1166e74, graphics, 1U);
+    native<void>(base, 0x1166c30, graphics, color);
+}
+
+extern "C" void asterDailySignCard(Address base, Object graphics, Object image, Object tile, int x, int y) {
+    const int index = field<int>(tile, 0xd8);
+    const bool claimed = index >= 0 && index < progress.count;
+    if (claimed) beginClaimedTint(base, graphics);
+    native<void>(base, 0x11694c8, graphics, image, x, y);
+    if (claimed) native<void>(base, 0x116d764, graphics);
+}
+#endif
+
 extern "C" void asterDailySignDraw(Address base, const DrawRegisters& args, const DrawStack& stack) {
     auto draw = [&](Object font, float y, const char32_t* const* text, float inset = 0.0f) {
         native<void>(base, 0x13af2d0, font, args.graphics, args.x + inset, y, stack.width - 2 * inset,
@@ -414,22 +458,49 @@ extern "C" void asterDailySignDraw(Address base, const DrawRegisters& args, cons
     auto& labels = tileLabels[index];
     const int width = field<int>(args.tile, 0x30);
     const int height = field<int>(args.tile, 0x34);
+#ifdef ASTER_SIGN_IN_STOCK_LAYOUT
+    const int inset = width / 14;
+    const bool claimed = index < progress.count;
+#else
     const int inset = width / 10;
+#endif
     fitTitle(base, labels, args.font, width - inset * 2);
+#ifdef ASTER_SIGN_IN_STOCK_LAYOUT
+    if (claimed) beginClaimedTint(base, args.graphics);
+    drawRewardImage(base, args.graphics, field<Object>(args.tile, 0xa4),
+                    width / 2, height * (labels.split ? 55 : 50) / 100,
+                    width * 68 / 100, height * (labels.split ? 35 : 51) / 100);
+    if (claimed) native<void>(base, 0x116d764, args.graphics);
+#else
     drawRewardImage(base, args.graphics, field<Object>(args.tile, 0xa4),
                     width / 2, height * (labels.split ? 51 : 45) / 100,
                     width * 68 / 100, height * (labels.split ? 30 : 44) / 100);
+#endif
     if (labels.split) {
         draw(labels.fittedFont, args.y, &labels.firstLine, inset);
         draw(labels.fittedFont, args.y + height * 0.13f, &labels.secondLine, inset);
     } else {
         draw(labels.fittedFont, args.y, &labels.title, inset);
     }
+#ifdef ASTER_SIGN_IN_STOCK_LAYOUT
+    if (claimed) {
+        unsigned color[] = {159, 153, 132, 255};
+        native<void>(base, 0x13af2d0, args.font, args.graphics, args.x, height * 0.66f, stack.width,
+                     &labels.amount, stack.alignment, color, stack.flags);
+    } else {
+        draw(args.font, height * 0.66f, &labels.amount);
+    }
+    if (claimed) {
+        drawRewardImage(base, args.graphics, claimMark, width / 2, height * 64 / 100,
+                        width * 36 / 100, height * 34 / 100);
+    }
+#else
     draw(args.font, height * 0.65f, &labels.amount);
     if (index < progress.count) {
         drawRewardImage(base, args.graphics, claimMark, width / 2, height * 72 / 100,
                         width * 45 / 100, height * 36 / 100);
     }
+#endif
 }
 
 static unsigned walletBalance(Object player, unsigned offset) {
@@ -606,10 +677,20 @@ extern "C" void asterDailySignFooter(Address base, Object dialog) {
     resolveSkin(base, pressed, "IMAGE_UI_GENERIC_PURPLEBUTTON_DOWN", 3U);
     if (normal.image) native<void>(base, 0x7e90dc, button, &normal, pressed.image ? &pressed : &normal);
     const float scale = field<float>(app, 0x698);
+#ifdef ASTER_SIGN_IN_STOCK_LAYOUT
+    const int width = int(152 * scale);
+    const int height = int(42 * scale);
+    const int panelWidth = field<int>(dialog, 0x30);
+    const int x = panelWidth * 74 / 100 - width / 2;
+    const int scrollBottom = field<int>(scroll, 0x2c) + field<int>(scroll, 0x34);
+    // Keep the added action in the clear band above the right grass decoration.
+    const int y = scrollBottom + int(8 * scale);
+#else
     const int width = int(186 * scale);
     const int height = int(53 * scale);
     const int x = (field<int>(dialog, 0x30) - width) / 2;
     const int y = field<int>(scroll, 0x2c) + field<int>(scroll, 0x34) + int(15 * scale);
+#endif
     widgetCall(button, 0xac, x, y, width, height);
     widgetCall(dialog, 0x10, button);
     makeupButton = button;

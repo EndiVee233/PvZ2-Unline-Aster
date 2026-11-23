@@ -295,12 +295,12 @@ final class AdventureFriendFiles {
     static JSONArray merge(Activity activity, int owner, JSONArray offline) throws JSONException {
         JSONArray merged = new JSONArray();
         Set<Integer> ids = new HashSet<>();
+        String ownId = identity(activity, owner);
         for (int i = 0; i < offline.length(); i++) {
             JSONObject player = offline.getJSONObject(i);
-            ids.add(player.getInt("id"));
-            merged.put(player);
+            if ((!player.has("playerId") || !ownId.equals(player.optString("playerId")))
+                    && ids.add(player.getInt("id"))) merged.put(player);
         }
-        String ownId = identity(activity, owner);
         JSONArray snapshot = community;
         for (int i = 0; i < snapshot.length() && merged.length() < MAX_FRIENDS; i++) {
             JSONObject player = snapshot.getJSONObject(i);

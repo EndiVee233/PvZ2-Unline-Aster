@@ -7,10 +7,7 @@ constexpr int cnUserWidth = 680;
 constexpr int cnUserHeight = 448;
 constexpr Word userSlots = 3;
 constexpr Word userPageSize = 6;
-constexpr char userPlants[][32] = {
-#include "adventure_user_plants.inc"
-};
-constexpr Word userPlantCount = sizeof(userPlants) / sizeof(userPlants[0]);
+constexpr Word userPlantCount = sizeof(plantPackets) / sizeof(plantPackets[0]);
 constexpr MenuColor userWhite{255, 249, 227, 255};
 constexpr MenuColor userInk{26, 63, 58, 255};
 constexpr MenuColor userPaper{233, 242, 219, 255};
@@ -21,39 +18,62 @@ struct UserPreferences {
 };
 static_assert(sizeof(UserPreferences) == 108);
 
-enum class UserPage { Home, Avatars, Loans, Plants };
+enum class UserPage { Home, Avatars, Loans, Plants, Friends, AddFriend };
 enum UserAction : Word { UserClose = 1, UserBack, UserAvatars, UserLoans, UserCode,
                          UserPrev, UserNext, UserClear, UserConfirmAvatar, UserExport,
+                         UserFriendList, UserFriendAdd,
                          UserSlot = 16, UserAvatar = 32, UserPlant = 64 };
+constexpr Word friendRowAction = 0x100;
+constexpr Word friendListRequest = 9, friendCatalogRequest = 10, friendAddRequest = 11, friendRemoveRequest = 12;
+constexpr Word maxRoster = 6;
 enum CnUserArt : Word {
     CnNone, CnFrame, CnDave, CnHint, CnGift, CnName, CnPaper, CnPreview, CnClose, CnCloseDown,
     CnCloseTab, CnCloseTabDown, CnAction, CnActionDown, CnArtCount
 };
 struct UserDialog {
-    Object widget, dialog, app, artApp;
-    bool requested, pressed;
+    Object widget, friendWidget, dialog, app, artApp;
+    bool requested, friendRequested, pressed, friendPressed, heldPackets;
     UserPreferences data;
     UserPage page;
     Word action, slot, plantPage, availableCount, avatarPreview;
     struct Choice { Word index, tier; } available[userPlantCount];
     ButtonSkin portraits[friendAvatarCount];
     ButtonSkin packets[4];
-    ButtonSkin mapSkin, mapPressed;
+    ButtonSkin mapSkin, mapPressed, friendSkin, friendDown;
+    const char32_t* friendCaption;
     ButtonSkin cnArt[CnArtCount];
     struct Label { const char32_t* text; MenuRect rect; MenuColor color; } labels[20];
-    struct Control { Object button; MenuRect rect; CnUserArt normal, pressed; } controls[10];
-    struct Image { Object art; MenuRect rect; } images[9];
+    struct Control { Object button; MenuRect rect; CnUserArt normal, pressed; } controls[12];
+    struct Image { Object art; MenuRect rect; } images[24];
     struct LoanCard { BorrowRowView plant; MenuRect rect; Word tier; } cards[userPageSize];
     Word labelCount, controlCount, imageCount, cardCount;
 };
 static UserDialog user;
+
+struct FriendBook {
+    SocialMessage request;
+    Word nextPoll, expires, status, rosterCount, total, page, count;
+    bool pending;
+    struct Entry { Word id, avatar; char32_t name[40]; } entries[maxRoster];
+    enum Art { Tab, Selected, Topper, Row, Avatar, Close, Leaves, ArtCount };
+    ButtonSkin art[ArtCount];
+};
+static FriendBook friendBook;
+
+static bool friendsPage() {
+    return user.page == UserPage::Friends || user.page == UserPage::AddFriend;
+}
+
+static bool friendBookUsesBorrowFrame(Object dialog) {
+    return dialog && dialog == user.dialog && friendsPage();
+}
 
 static bool userHasCnArt() {
     return user.cnArt[CnFrame].image != nullptr;
 }
 
 static bool userDrawsOwnFrame(Object dialog) {
-    return dialog && dialog == user.dialog && userHasCnArt();
+    return dialog && dialog == user.dialog && userHasCnArt() && !friendsPage();
 }
 
 static bool cnUserUsesFullLayout() {
@@ -106,7 +126,7 @@ static void findUserPlants(Word base, Object profile) {
     char allocator = 0;
     for (Word i = 0; i < userPlantCount; ++i) {
         const char* alias = nullptr;
-        native<void>(base, 0x14ed0e1, &alias, userPlants[i], &allocator);
+        native<void>(base, 0x14ed0e1, &alias, plantPackets[i].alias, &allocator);
         const int tier = native<int>(base, 0x717300, profile, &alias, 0U);
         releaseString(base, alias);
         if (tier >= 0 && tier <= 4) user.available[user.availableCount++] = {i, tier ? Word(tier) : 1U};
@@ -132,7 +152,7 @@ static bool exportUser(Word base, Object profile) {
     for (Word slot = 0; slot < userSlots; ++slot) {
         for (Word i = 0; i < user.availableCount; ++i) {
             const auto& plant = user.available[i];
-            const auto& type = userPlants[plant.index];
+            const auto& type = plantPackets[plant.index].alias;
             if (!sameUserPlant(user.data.loans[slot], type)) continue;
             for (Word j = 0; type[j]; ++j) data.loans[slot].type[j] = type[j];
             data.loans[slot].level = plant.tier;
@@ -156,15 +176,22 @@ static void resetUserPage(Word base) {
 static void closeUserDialog(Word base) {
     Object app = gameApp(base);
     if (userMounted(app)) detachGameDialog(base, app, user.dialog);
+    if (user.heldPackets && app && app == user.app)
+        changeMenuGroup(base, app, packetResourceGroup, false);
+    user.heldPackets = false;
     resetUserPage(base);
     user.dialog = user.app = nullptr;
     user.action = 0;
+    friendBook.pending = false;
 }
 
 static MenuRect userLayout(Object dialog, MenuRect box) {
     const bool full = cnUserUsesFullLayout();
-    const float xScale = float(field<int>(dialog, 0x30)) * (full ? 1.0f / cnUserWidth : 1.0f / userWidth);
-    const float yScale = float(field<int>(dialog, 0x34)) * (full ? 1.0f / cnUserHeight : 1.0f / userHeight);
+    const bool friends = friendsPage();
+    const float xScale = float(field<int>(dialog, 0x30)) *
+        (friends ? 1.0f / borrowWidth : full ? 1.0f / cnUserWidth : 1.0f / userWidth);
+    const float yScale = float(field<int>(dialog, 0x34)) *
+        (friends ? 1.0f / borrowHeight : full ? 1.0f / cnUserHeight : 1.0f / userHeight);
     return {int(box.x * xScale), int(box.y * yScale), int(box.width * xScale), int(box.height * yScale)};
 }
 
@@ -200,8 +227,123 @@ static void userImage(Object art, MenuRect rect) {
     if (art) user.images[user.imageCount++] = {art, rect};
 }
 
+static void loadFriendBookArt(Word base) {
+    static constexpr char keys[][48] = {
+        "IMAGE_ASTER_SOCIAL_TAB_NORMAL", "IMAGE_ASTER_SOCIAL_TAB_SELECTED",
+        "IMAGE_ASTER_SOCIAL_BORROW_TOPPER", "IMAGE_ASTER_SOCIAL_BORROW_ROW",
+        "IMAGE_ASTER_SOCIAL_FRIEND_AVATAR", "IMAGE_UI_DIALOG_ASSET_CLOSE_BTN",
+        "IMAGE_UI_DIALOG_ASSET_CORNER_LEAVES",
+    };
+    for (Word i = 0; i < FriendBook::ArtCount; ++i) resolveMenuSkin(base, friendBook.art[i], keys[i], 2U);
+}
+
+static void requestFriendBook(Word base, Word operation, Word value) {
+    const Word now = wallTime(base);
+    friendBook.request = {now + ++sequence, user.data.owner, value, operation};
+    friendBook.nextPoll = now;
+    friendBook.expires = now + 550;
+    friendBook.count = 0;
+    friendBook.pending = writeBytes(base, &friendBook.request, sizeof(SocialMessage), dialogFile, dialogTemp);
+    friendBook.status = friendBook.pending ? 0 : 3;
+}
+
+static bool pollFriendBook(Word base) {
+    if (!friendBook.pending) return false;
+    const Word now = wallTime(base);
+    if (int(now - friendBook.nextPoll) < 0) return false;
+    friendBook.nextPoll = now + 5;
+    const int fd = native<int>(base, 0x148448, replyFile, 0, 0);
+    if (fd >= 0) {
+        SocialMessage reply;
+        const auto& request = friendBook.request;
+        const bool matches = readExact(base, fd, &reply, sizeof(reply)) &&
+            reply.token == request.token && reply.owner == request.owner &&
+            reply.day == request.day && reply.kind == friendListRequest;
+        Word header[5];
+        char extra;
+        bool valid = matches && readExact(base, fd, header, sizeof(header)) &&
+            header[0] <= 3 && header[1] <= maxRoster && header[2] <= 40 && header[3] <= 6 &&
+            header[4] <= maxRoster && header[4] <= header[2] &&
+            readExact(base, fd, friendBook.entries, header[4] * sizeof(FriendBook::Entry)) &&
+            native<int>(base, 0x148460, fd, &extra, 1U) == 0;
+        native<int>(base, 0x147b90, fd);
+        if (matches) {
+            native<int>(base, 0x148424, replyFile);
+            if (valid) {
+                for (Word i = 0; i < header[4]; ++i) {
+                    const auto& row = friendBook.entries[i];
+                    if (!row.id || !validFriendAvatar(row.avatar) || !row.name[0] || row.name[39])
+                        valid = false;
+                }
+            }
+            friendBook.pending = false;
+            friendBook.status = valid ? header[0] : 3;
+            if (valid) {
+                friendBook.rosterCount = header[1];
+                friendBook.total = header[2];
+                friendBook.page = header[3];
+                friendBook.count = header[4];
+            }
+            return true;
+        }
+    }
+    if (int(now - friendBook.expires) < 0) return false;
+    friendBook.pending = false;
+    friendBook.status = 3;
+    return true;
+}
+
+static void buildFriendBook(Word base) {
+    const bool add = user.page == UserPage::AddFriend;
+    const auto& art = friendBook.art;
+    userImage(art[FriendBook::Topper].image, {18, 21, 634, 46});
+    userImage(art[add ? FriendBook::Tab : FriendBook::Selected].image, {145, 0, 184, 72});
+    userImage(art[add ? FriendBook::Selected : FriendBook::Tab].image, {335, 0, 184, 72});
+    userImage(art[FriendBook::Close].image, {598, 12, 51, 48});
+    userImage(art[FriendBook::Leaves].image, {7, 391, 158, 84});
+    userImage(art[FriendBook::Leaves].image, {505, 391, 158, 84});
+    userLabel(base, U"好友", {145, 13, 184, 40}, userWhite);
+    userLabel(base, U"添加好友", {335, 13, 184, 40}, userWhite);
+    userButton(base, U"", UserFriendList, {145, 6, 184, 54});
+    userButton(base, U"", UserFriendAdd, {335, 6, 184, 54});
+    userButton(base, U"", UserClose, {598, 12, 51, 48});
+    constexpr MenuColor rowInk{65, 46, 23, 255};
+    for (Word i = 0; i < friendBook.count; ++i) {
+        const auto& row = friendBook.entries[i];
+        const auto box = borrowRowBounds(i);
+        userImage(art[FriendBook::Row].image, box);
+        userImage(art[FriendBook::Avatar].image, {box.x + 6, box.y + 6, 66, 66});
+        const Word avatar = row.avatar < friendAvatarCount ? row.avatar : friendAvatarIndex(user.data.owner, row.id);
+        userImage(user.portraits[avatar].image, {box.x + 10, box.y + 10, 58, 58});
+        char32_t name[18];
+        auto* end = append(name, row.name, 10);
+        if (row.name[10]) append(end, U"…");
+        userLabel(base, name, {box.x + 78, box.y + 2, 214, 35}, userWhite);
+        const MenuRect action{box.x + 192, box.y + 41, 102, 29};
+        if (!add || friendBook.rosterCount < maxRoster) {
+            userButton(base, U"", friendRowAction + i, action);
+            userLabel(base, add ? U"添加" : U"移除", action, rowInk);
+        }
+    }
+    if (friendBook.page) userButton(base, U"上一页", UserPrev, {35, 358, 112, 41});
+    if ((friendBook.page + 1) * maxRoster < friendBook.total)
+        userButton(base, U"下一页", UserNext, {523, 358, 112, 41});
+    const char32_t* status = nullptr;
+    static constexpr char32_t errors[][18] = {
+        U"好友已满", U"这位玩家暂不可添加", U"好友列表暂不可用，请重试"
+    };
+    if (friendBook.pending) status = U"正在读取好友…";
+    else if (friendBook.status) status = errors[friendBook.status - 1];
+    else if (add && friendBook.rosterCount == maxRoster) status = U"好友已满";
+    else if (!friendBook.count) status = add ? U"暂无可添加的玩家" : U"还没有好友";
+    if (status) userLabel(base, status, {130, friendBook.count ? 342 : 187, 410, 39}, userWhite);
+    char32_t count[24];
+    append(number(append(count, U"好友 "), friendBook.rosterCount), U" / 6");
+    userLabel(base, count, {195, 372, 280, 28}, userWhite);
+}
+
 static void showLoanPlant(Word base, const UserDialog::Choice& plant, MenuRect box) {
-    const auto& alias = userPlants[plant.index];
+    const auto& alias = plantPackets[plant.index].alias;
     auto& card = user.cards[user.cardCount++];
     loadBorrowPacketArt(base, card.plant, alias);
     card.rect = {box.x + 14, box.y + 6, box.width - 28, box.height - 56};
@@ -267,6 +409,11 @@ static void buildCnUserPage(Word base, Object profile, const char32_t* notice) {
 static void buildUserPage(Word base, Object profile, const char32_t* notice = nullptr) {
     resetUserPage(base);
     if (Object controls = field<Object>(user.dialog, 0xa8)) native<void>(base, 0x9c0818, controls);
+    if (friendsPage()) {
+        buildFriendBook(base);
+        placeUserButtons();
+        return;
+    }
     if (cnUserUsesFullLayout()) {
         buildCnUserPage(base, profile, notice);
         placeUserButtons();
@@ -300,7 +447,7 @@ static void buildUserPage(Word base, Object profile, const char32_t* notice = nu
             const MenuRect box{30 + 188 * int(slot), 63, 181, 174};
             const UserDialog::Choice* chosen = nullptr;
             for (Word i = 0; i < user.availableCount; ++i) {
-                if (sameUserPlant(user.data.loans[slot], userPlants[user.available[i].index]))
+                if (sameUserPlant(user.data.loans[slot], plantPackets[user.available[i].index].alias))
                     chosen = user.available + i;
             }
             userButton(base, U"", UserSlot + slot, box);
@@ -338,7 +485,12 @@ static void drawUserDialog(Word base, Object dialog, Object graphics) {
     const auto oldColor = field<MenuColor>(graphics, 0x4c);
     const auto oldTint = field<unsigned char>(graphics, 0x64);
     native<void>(base, 0x1166e74, graphics, false);
-    if (userHasCnArt()) {
+    if (friendsPage()) {
+        for (int i = 0; i < 17; ++i)
+            userRect(base, graphics, userLayout(dialog, {10, 353 + i * 5, 650, 5}),
+                     {42, 27, 16, i * i * 58 / 256});
+        native<void>(base, 0x1166e74, graphics, false);
+    } else if (userHasCnArt()) {
         if (user.page == UserPage::Avatars) {
             userSkinImage(base, graphics, user.cnArt[CnPaper].image, userLayout(dialog, {7, 63, 337, 366}));
             userSkinImage(base, graphics, user.cnArt[CnPreview].image, userLayout(dialog, {354, 127, 306, 283}));
@@ -370,7 +522,7 @@ static void drawUserDialog(Word base, Object dialog, Object graphics) {
     for (Word i = 0; i < user.cardCount; ++i) {
         const auto& card = user.cards[i];
         drawSocialSeedPacket(base, graphics, card.plant, userLayout(dialog, card.rect),
-                             user.packets[0].image, user.packets[card.tier - 1].image, card.tier);
+                             user.packets[0].image, user.packets[card.tier - 1].image, card.tier, true);
     }
 
     auto& text = field<const char32_t*>(dialog, 0xb4);
@@ -399,6 +551,9 @@ static void updateUserDialog(Word base) {
         changeMenuGroup(base, app, 2U, true);
         resolveMenuSkin(base, user.mapSkin, "IMAGE_ASTER_SOCIAL_USER_BUTTON", 2U);
         resolveMenuSkin(base, user.mapPressed, "IMAGE_ASTER_SOCIAL_USER_BUTTON_DOWN", 2U);
+        resolveMenuSkin(base, user.friendSkin, "IMAGE_UI_HUD_WORLDMAP_DAILY_SIGN_REWARD", 2U);
+        resolveMenuSkin(base, user.friendDown, "IMAGE_UI_HUD_WORLDMAP_DAILY_SGIN_REWARD_DOWN", 2U);
+        if (!user.friendCaption) makeText(base, user.friendCaption, U"好友");
         static constexpr char artKeys[CnArtCount][44] = {
             "", "IMAGE_ASTER_SOCIAL_CN_USER_FRAME", "IMAGE_ASTER_SOCIAL_CN_USER_DAVE",
             "IMAGE_ASTER_SOCIAL_CN_USER_HINT", "IMAGE_ASTER_SOCIAL_CN_USER_GIFT", "IMAGE_ASTER_SOCIAL_CN_USER_NAME",
@@ -410,26 +565,38 @@ static void updateUserDialog(Word base) {
         for (Word i = 1; i < CnArtCount; ++i) resolveMenuSkin(base, user.cnArt[i], artKeys[i], 2U);
         user.artApp = app;
     }
-    if (!user.dialog && !user.requested) return;
+    if (!user.dialog && !user.requested && !user.friendRequested) return;
     Object store = ownerStore(base);
     const Word id = owner(store);
     if (user.dialog && (!userMounted(app) || user.data.owner != id || !socialContentEnabled(base))) {
         closeUserDialog(base);
     }
-    if (user.requested) {
-        user.requested = false;
+    if (user.requested || user.friendRequested) {
+        const bool openFriends = user.friendRequested;
+        user.requested = user.friendRequested = false;
         if (user.dialog || gameBoard(base) || id == ~0U || !socialContentEnabled(base) ||
             social.phase != SocialPhase::Idle) return;
         const auto profile = native<Object>(base, 0x7a98dc, store);
         if (!profile) return;
         const bool cnArt = userHasCnArt();
-        user.dialog = openGameDialog(base, app, cnArt ? cnUserWidth : userWidth,
-                                     cnArt ? cnUserHeight : userHeight, 0, true);
+        user.dialog = openGameDialog(base, app,
+                                     openFriends ? borrowWidth : cnArt ? cnUserWidth : userWidth,
+                                     openFriends ? borrowHeight : cnArt ? cnUserHeight : userHeight, 0, true);
         if (!user.dialog) return;
         user.app = app;
         readUserPreferences(base, id);
         for (Word i = 0; i < friendAvatarCount; ++i)
             resolveMenuSkin(base, user.portraits[i], cnArt ? communityAvatarKeys[i] : friendAvatarKeys[i], 2U);
+        if (openFriends) {
+            user.page = UserPage::Friends;
+            friendBook.rosterCount = friendBook.total = friendBook.page = 0;
+            loadFriendBookArt(base);
+            requestFriendBook(base, friendListRequest, 0);
+            buildUserPage(base, profile);
+            return;
+        }
+        changeMenuGroup(base, app, packetResourceGroup, true);
+        user.heldPackets = true;
         static constexpr char packetKeys[][28] = {"IMAGE_UI_PACKETS_READY", "IMAGE_UI_PACKETS_FRAME_2",
                                                     "IMAGE_UI_PACKETS_FRAME_3", "IMAGE_UI_PACKETS_FRAME_4"};
         for (Word i = 0; i < 4; ++i) resolveMenuSkin(base, user.packets[i], packetKeys[i], 2U);
@@ -440,12 +607,30 @@ static void updateUserDialog(Word base) {
         writeBytes(base, &refresh, sizeof(refresh), dialogFile, dialogTemp);
         return;
     }
+    if (user.dialog && friendsPage() && pollFriendBook(base))
+        buildUserPage(base, nullptr);
     if (!user.dialog || !user.action) return;
     const Word action = user.action;
     user.action = 0;
     if (action == UserClose || action == UserCode) {
         closeUserDialog(base);
         if (action == UserCode) native<void>(base, 0x402ccc, app);
+        return;
+    }
+    if (friendsPage()) {
+        if (friendBook.pending && friendBook.request.kind >= friendAddRequest) return;
+        if (action == UserFriendList || action == UserFriendAdd) {
+            user.page = action == UserFriendList ? UserPage::Friends : UserPage::AddFriend;
+            friendBook.page = friendBook.total = 0;
+            requestFriendBook(base, action == UserFriendList ? friendListRequest : friendCatalogRequest, 0);
+        } else if (!friendBook.pending && (action == UserPrev || action == UserNext)) {
+            const Word page = action == UserPrev && friendBook.page ? friendBook.page - 1 : friendBook.page + 1;
+            requestFriendBook(base, user.page == UserPage::Friends ? friendListRequest : friendCatalogRequest, page);
+        } else if (!friendBook.pending && action >= friendRowAction && action - friendRowAction < friendBook.count) {
+            const Word id = friendBook.entries[action - friendRowAction].id;
+            requestFriendBook(base, user.page == UserPage::Friends ? friendRemoveRequest : friendAddRequest, id);
+        } else return;
+        buildUserPage(base, nullptr);
         return;
     }
 
@@ -481,7 +666,7 @@ static void updateUserDialog(Word base) {
         if (action == UserPrev && user.plantPage) --user.plantPage;
         else if (action == UserNext && (user.plantPage + 1) * userPageSize < user.availableCount) ++user.plantPage;
         else if (action == UserClear || (action >= UserPlant && action < UserPlant + user.availableCount)) {
-            const char* alias = action == UserClear ? "" : userPlants[user.available[action - UserPlant].index];
+            const char* alias = action == UserClear ? "" : plantPackets[user.available[action - UserPlant].index].alias;
             for (Word i = 0; *alias && i < userSlots; ++i) {
                 if (i != user.slot && sameUserPlant(user.data.loans[i], alias)) notice = U"这株植物已在其他槽位";
             }
@@ -512,31 +697,73 @@ extern "C" bool asterUserHasCodeEntry(Word base) {
 
 extern "C" void asterUserAttach(Word base) {
     user.widget = createAdventureHudWidget(base, U"UIWorldMapUserButton");
-    if (!user.widget) return;
-    field<Word>(user.widget, 0x54) |= 8;
-    native<void>(base, 0x9766f4, user.widget, 1U);
+    user.friendWidget = createAdventureHudWidget(base, U"UIWorldMapFriendButton");
+    Object entries[] = {user.widget, user.friendWidget};
+    for (const auto entry : entries) {
+        if (!entry) continue;
+        field<Word>(entry, 0x54) |= 12;
+        native<void>(base, 0x9766f4, entry, 1U);
+    }
 }
 
 extern "C" bool asterUserHit(Word base, Object widget, int x, int y) {
-    return widget == user.widget && socialContentEnabled(base) &&
+    return widget && (widget == user.widget || widget == user.friendWidget) && socialContentEnabled(base) &&
         native<bool>(base, 0x97680c, widget, x, y);
 }
 
 extern "C" bool asterUserTouch(Word base, Object widget, int x, int y, bool pressed) {
+    if (!widget || (widget != user.widget && widget != user.friendWidget)) return false;
     const bool hit = asterUserHit(base, widget, x, y);
-    if (widget != user.widget) return false;
-    if (user.pressed && hit && !pressed) user.requested = true;
-    user.pressed = pressed && hit;
+    auto& wasPressed = widget == user.friendWidget ? user.friendPressed : user.pressed;
+    auto& requested = widget == user.friendWidget ? user.friendRequested : user.requested;
+    if (wasPressed && hit && !pressed) requested = true;
+    wasPressed = pressed && hit;
     return hit;
 }
 
+static void drawFriendMapButton(Word base, Object graphics, MenuRect box) {
+    const auto sprite = user.friendPressed && user.friendDown.image ? user.friendDown.image : user.friendSkin.image;
+    if (!sprite || !user.friendCaption) return;
+    const int inset = box.height / 10;
+    const auto placement = fitBorrowImage(sprite, {box.x + inset, box.y + inset,
+                                                    box.width - 2 * inset, box.height - 2 * inset});
+    const int width = int(field<int>(sprite, 0x28) * placement.scale + 0.5f);
+    const int height = int(field<int>(sprite, 0x2c) * placement.scale + 0.5f);
+    const MenuRect button{int(placement.x), int(placement.y), width, height};
+    const auto previous = field<MenuColor>(graphics, 0x4c);
+    userSkinImage(base, graphics, sprite, button);
+    // The stock sprite has its sign-in characters baked into the flat center.
+    const MenuColor green = user.friendPressed ? MenuColor{48, 74, 60, 255} : MenuColor{120, 184, 150, 255};
+    userRect(base, graphics, {button.x + width * 17 / 100, button.y + height * 24 / 100,
+                              width * 68 / 100, height * 49 / 100}, green);
+    const auto font = field<Object>(reinterpret_cast<Object>(base), 0x18411b8);
+    if (font) {
+        constexpr MenuColor outline{20, 32, 26, 255};
+        const MenuColor ink = user.friendPressed ? MenuColor{173, 186, 179, 255} : userWhite;
+        const float textY = button.y + height * 0.24f;
+        native<void>(base, 0x13af2d0, font, graphics, float(button.x + 1), textY + 2,
+                     float(width), &user.friendCaption, 1U, &outline, 0U);
+        native<void>(base, 0x13af2d0, font, graphics, float(button.x), textY,
+                     float(width), &user.friendCaption, 1U, &ink, 0U);
+    }
+    native<void>(base, 0x1166c30, graphics, &previous);
+}
+
 extern "C" void asterUserDraw(Word base, Object widget, Object graphics) {
-    if (widget != user.widget || !user.mapSkin.image || !socialContentEnabled(base) ||
+    if (!widget || (widget != user.widget && widget != user.friendWidget) || !socialContentEnabled(base) ||
         !native<bool>(base, 0x976720, widget)) return;
     MenuRect box;
     const Word bounds = field<Word>(field<Object>(widget, 0), 0x5c);
     reinterpret_cast<void(*)(MenuRect*, Object)>(bounds)(&box, widget);
     if (box.width < 10 || box.height < 10) return;
+    if (widget == user.friendWidget) {
+        const auto tint = field<unsigned char>(graphics, 0x64);
+        native<void>(base, 0x1166e74, graphics, false);
+        drawFriendMapButton(base, graphics, box);
+        field<unsigned char>(graphics, 0x64) = tint;
+        return;
+    }
+    if (!user.mapSkin.image) return;
 
     const int inset = box.height / 10 + (user.pressed ? box.height / 40 : 0);
     const auto image = user.pressed && user.mapPressed.image ? user.mapPressed.image : user.mapSkin.image;

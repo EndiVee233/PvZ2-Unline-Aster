@@ -36,6 +36,7 @@ public final class AdventureSocial {
     private static final int BORROW_FRIENDS = 6;
     private static final int REFRESH_FRIENDS = 7;
     private static final int SAVE_BACKUP = 8;
+    private static final int FRIEND_LIST = 9, FRIEND_CATALOG = 10, FRIEND_ADD = 11, FRIEND_REMOVE = 12;
     private static final int FRIEND = 0x100;
     private static final int UNKNOWN_AVATAR = -1;
     private static long nextFramePoll;
@@ -112,7 +113,9 @@ public final class AdventureSocial {
                 byte[] raw = PvpPresetDocument.read(file);
                 if (raw.length != 16) return;
                 Message message = new Message(raw);
-                if (message.owner == -1 || !AdventureFormationRecord.validLevel(message.day)) return;
+                boolean rosterMessage = message.kind >= FRIEND_LIST && message.kind <= FRIEND_REMOVE;
+                if (message.owner == -1 || (!rosterMessage && !AdventureFormationRecord.validLevel(message.day)))
+                    return;
                 activity.runOnUiThread(() -> receive(activity, message));
             }
         } catch (ReflectiveOperationException | IOException | RuntimeException error) {
@@ -132,6 +135,17 @@ public final class AdventureSocial {
         } else if (message.kind == REFRESH_FRIENDS) {
             JSONObject catalog = catalog(activity);
             if (catalog != null) AdventureFriendFiles.refresh(activity, catalog);
+        } else if (message.kind >= FRIEND_LIST && message.kind <= FRIEND_REMOVE) {
+            JSONArray candidates = readFriendCatalog(activity, message.owner, players -> players);
+            try {
+                byte[] page = AdventureFriendRoster.respond(activity, message.owner, message.kind,
+                        message.day, candidates == null ? new JSONArray() : candidates);
+                reply(activity, message, FRIEND_LIST, page);
+            } catch (IOException | JSONException error) {
+                android.util.Log.w("AsterSocial", "Could not read friend roster", error);
+                reply(activity, message, FRIEND_LIST,
+                        ByteBuffer.allocate(20).order(ByteOrder.LITTLE_ENDIAN).putInt(3).array());
+            }
         } else if (message.kind == SELECT) {
             activeMenu = message;
             menuRuns = friends(activity, message);
@@ -217,6 +231,11 @@ public final class AdventureSocial {
     }
 
     private static <T> T readAllFriends(Activity activity, int owner, Reader<T> reader) {
+        return readFriendCatalog(activity, owner,
+                players -> reader.read(AdventureFriendRoster.selected(activity, owner, players)));
+    }
+
+    private static <T> T readFriendCatalog(Activity activity, int owner, Reader<T> reader) {
         JSONObject catalog = catalog(activity);
         if (catalog != null) AdventureFriendFiles.refresh(activity, catalog);
         File external = activity.getExternalFilesDir(null);

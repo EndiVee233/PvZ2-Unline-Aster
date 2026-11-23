@@ -250,8 +250,13 @@ static void loadBorrowDialogArt(Word base) {
 }
 
 struct PacketAnchor {
-    char key[33];
+    char key[49];
     int x, y;
+};
+
+struct PlantPacketName { char alias[32], sprite[49]; };
+static constexpr PlantPacketName plantPackets[] = {
+#include "adventure_user_plants.inc"
 };
 static constexpr PacketAnchor packetAnchors[] = {
 #include "adventure_packet_anchors.inc"
@@ -271,10 +276,20 @@ static const PacketAnchor* packetAnchor(const char* key) {
 }
 
 static void loadBorrowPacketArt(Word base, BorrowRowView& row, const char* alias) {
-    char key[50];
+    char key[66];
+    const char* sprite = nullptr;
+    for (const auto& plant : plantPackets) {
+        const char* source = plant.alias;
+        const char* query = alias;
+        while (*source && *source == *query) { ++source; ++query; }
+        if (*source == *query) {
+            sprite = plant.sprite;
+            break;
+        }
+    }
     char* output = key;
     for (char ch : "IMAGE_UI_PACKETS_") if (ch) *output++ = ch;
-    for (const char* ch = alias; *ch; ++ch) {
+    for (const char* ch = sprite ? sprite : alias; *ch; ++ch) {
         *output++ = *ch >= 'a' && *ch <= 'z' ? *ch - 'a' + 'A' : *ch;
     }
     *output = 0;
@@ -296,7 +311,8 @@ static void loadBorrowPacketArt(Word base, BorrowRowView& row, const char* alias
 }
 
 static void drawSocialSeedPacket(Word base, Object graphics, const BorrowRowView& row,
-                                 MenuRect bounds, Object background, Object border, Word tier) {
+                                 MenuRect bounds, Object background, Object border, Word tier,
+                                 bool centerArtwork = false) {
     const auto draw = [&](Object image, BorrowImagePlacement placement) {
         if (!image || placement.scale <= 0.0f) return;
         const float matrix[] = {placement.scale, 0, placement.x, 0, placement.scale,
@@ -314,7 +330,16 @@ static void drawSocialSeedPacket(Word base, Object graphics, const BorrowRowView
     draw(background, placement);
     const auto clip = field<MenuRect>(graphics, 0x20);
     native<void>(base, 0x116b2c4, graphics, &bounds);
-    draw(row.packet, {x + row.packetX * placement.scale, y + row.packetY * placement.scale, placement.scale});
+    if (centerArtwork && row.packet) {
+        const int width = int(field<int>(background, 0x28) * placement.scale);
+        const int height = int(field<int>(background, 0x2c) * placement.scale);
+        const int insetX = width / 9, insetY = height / 9;
+        const MenuRect inner{int(placement.x) + insetX, int(placement.y) + insetY,
+                             width - 2 * insetX, height - 2 * insetY};
+        draw(row.packet, fitBorrowImage(row.packet, inner));
+    } else {
+        draw(row.packet, {x + row.packetX * placement.scale, y + row.packetY * placement.scale, placement.scale});
+    }
     field<MenuRect>(graphics, 0x20) = clip;
     if (border && tier >= 2 && tier <= 4) {
         static constexpr char frames[][8] = {"FRAME_2", "FRAME_3", "FRAME_4"};
@@ -376,7 +401,7 @@ static void refreshBorrowOffers(Word base) {
 }
 
 static bool drawBorrowDialogPanel(Word base, Object dialog, Object graphics, const MenuRect* bounds) {
-    if (dialog != borrow.dialog) return false;
+    if (dialog != borrow.dialog && !friendBookUsesBorrowFrame(dialog)) return false;
     const int top = bounds->height * borrowTop / borrowHeight;
     const MenuRect frame{bounds->x, bounds->y + top, bounds->width,
                          bounds->height * (borrowBottom - borrowTop) / borrowHeight};

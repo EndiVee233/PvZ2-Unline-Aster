@@ -2,6 +2,7 @@
 
 namespace {
 static bool drawBorrowDialogPanel(Word base, Object dialog, Object graphics, const struct MenuRect* bounds);
+static bool friendBookUsesBorrowFrame(Object dialog);
 static void drawBorrowDialogContents(Word base, Object dialog, Object graphics);
 static void drawUserDialog(Word base, Object dialog, Object graphics);
 static bool userDrawsOwnFrame(Object dialog);
@@ -42,7 +43,8 @@ enum MenuArt : Word {
 #endif
 };
 static ButtonSkin menuArt[MenuArtCount];
-static constexpr char menuGroups[][16] = {"UI_AwardDialog", "UI_GameIntro", "UI_AsterSocial"};
+static constexpr Word packetResourceGroup = 3;
+static constexpr char menuGroups[][20] = {"UI_AwardDialog", "UI_GameIntro", "UI_AsterSocial", "UIImages_Dynamic"};
 static Word heldMenuGroups;
 
 struct LevelMenu {

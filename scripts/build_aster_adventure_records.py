@@ -587,7 +587,8 @@ def social_dex(output, sdk):
     output.mkdir(exist_ok=True)
     android = sdk / "platforms/android-34/android.jar"
     package = ROOT / "src/bootstrap-extra/com/popcap/pvz2cthd"
-    names = ("AdventureFormationRecord", "AdventureFriendFiles", "AdventureSocial", "AsterSaveBackup")
+    names = ("AdventureFormationRecord", "AdventureFriendFiles", "AdventureFriendRoster",
+             "AdventureSocial", "AsterSaveBackup")
     sources = [package / (name + ".java") for name in names]
     classes = output / "classes"
     classes.mkdir(exist_ok=True)
@@ -656,6 +657,26 @@ def patch_user_entry(dynamic):
     bundle = Bundle(dynamic)
     for layout in LAYOUTS:
         replace_rton(bundle, f"PACKAGES\\{layout}.RTON", add_user_button, allow_growth=True)
+    return bundle.build()
+
+
+def patch_friend_entry(dynamic):
+    from build_aster_daily_sign_in import LAYOUTS
+    from build_aster_hud_pickup import Bundle, replace_rton
+
+    def add_friend_button(document):
+        sheets = {alias: entry["objdata"] for entry in document["objects"]
+                  for alias in entry.get("aliases", ())}
+        user = sheets["UIWorldMapUserButton"]
+        button = user.copy()
+        button["PositionOffset"] = {"x": user["PositionOffset"]["x"] + 79,
+                                    "y": user["PositionOffset"]["y"]}
+        document["objects"].append(
+            {"objclass": "UIWidgetSheet", "aliases": ["UIWorldMapFriendButton"], "objdata": button})
+
+    bundle = Bundle(dynamic)
+    for layout in LAYOUTS:
+        replace_rton(bundle, f"PACKAGES\\{layout}.RTON", add_friend_button, allow_growth=True)
     return bundle.build()
 
 

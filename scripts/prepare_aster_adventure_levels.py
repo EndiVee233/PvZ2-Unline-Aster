@@ -86,18 +86,19 @@ def read_documents(apk):
 def write_packet_anchors(apk, output):
     """Keep the original atlas offsets when drawing cropped seed-packet sprites."""
     with ZipFile(ResourceZip(apk)) as archive:
-        member = next(name for name in archive.namelist() if name.endswith("/uicommon.rsb.smf"))
-        bundle = Bundle(archive.read(member))
-    group = next(item for item in bundle.manifest()[2]["groups"] if item["id"] == "UIImages_1536")
-    offsets = {
-        item["id"].removeprefix("IMAGE_UI_PACKETS_"): (item.get("x", 0), item.get("y", 0))
-        for item in group["resources"]
-        if item["id"].startswith("IMAGE_UI_PACKETS_") and item["path"][-2] == "packets"
-    }
+        offsets = {}
+        for package, group_id in (("uicommon", "UIImages_1536"), ("uiactive", "UIImages_Dynamic_1536")):
+            member = next(name for name in archive.namelist() if name.endswith(f"/{package}.rsb.smf"))
+            bundle = Bundle(archive.read(member))
+            group = next(item for item in bundle.manifest()[2]["groups"] if item["id"] == group_id)
+            for item in group["resources"]:
+                if item["id"].startswith("IMAGE_UI_PACKETS_"):
+                    key = item["id"].removeprefix("IMAGE_UI_PACKETS_")
+                    offsets.setdefault(key, (item.get("x", 0), item.get("y", 0)))
     for key in ("READY", "FRAME_2", "FRAME_3", "FRAME_4"):
         if key not in offsets:
             raise ValueError(f"Missing original packet sprite {key}")
-    entries = [f'    {{"{key}", {x}, {y}}},' for key, (x, y) in sorted(offsets.items())]
+    entries = [f'    {{"{key}", {x}, {y}}},' for key, (x, y) in sorted(offsets.items()) if len(key) <= 48]
     (output / "adventure_packet_anchors.inc").write_text("\n".join(entries) + "\n", encoding="ascii")
 
 
@@ -115,9 +116,19 @@ def write_user_plants(apk, output):
     _, offset, size = dict(bundle.files(index))[name]
     raw = package_data(bundle.payloads[index])[offset:offset + size]
     types = keyed(level_document(raw, name)["objects"])
-    aliases = sorted(alias for alias in types if re.fullmatch(r"[a-z0-9_]{1,31}", alias))
+    packet_names = set(re.findall(r'\{"([A-Z0-9_]+)",', (output / "adventure_packet_anchors.inc").read_text()))
+    aliases = {}
+    for alias, player_type in sorted(types.items()):
+        if not re.fullmatch(r"[a-z0-9_]{1,31}", alias):
+            continue
+        stock = alias.upper()
+        animation = player_type["objdata"].get("PopAnim", "").removeprefix("POPANIM_PLANT_")
+        candidates = (stock, stock.replace("_", ""), animation)
+        packet = next((candidate for candidate in candidates if candidate in packet_names), None)
+        if packet:
+            aliases[alias] = packet
     (output / "adventure_user_plants.inc").write_text(
-        "".join(f'    "{alias}",\n' for alias in aliases), encoding="ascii")
+        "".join(f'    {{"{alias}", "{packet}"}},\n' for alias, packet in aliases.items()), encoding="ascii")
 
 
 def level_key(alias):

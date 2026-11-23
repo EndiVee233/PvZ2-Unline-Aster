@@ -135,7 +135,7 @@ def extract_cn_user_art(apk):
     return sprites
 
 
-def append_cn_user_credit(bundle):
+def append_cn_user_credit(bundle, description="用户界面素材提取自"):
     path = "PROPERTIES\\CREDITS.TXT"
     index, = (i for i in range(len(bundle.groups)) if path in dict(bundle.files(i)))
     files = dict(bundle.files(index))
@@ -143,7 +143,7 @@ def append_cn_user_credit(bundle):
     data = package_data(bundle.payloads[index])
     original = data[offset:offset + size]
     newline = b"\r\n" if b"\r\n" in original else b"\n"
-    credit = ("", "", "{TITLE_CH}素材来源", "用户界面素材提取自",
+    credit = ("", "", "{TITLE_CH}素材来源", description,
               f"《植物大战僵尸2》中文版 {CN_VERSION}", "", "")
     updated = original + newline.join(line.encode("utf-8") for line in credit)
     files[path] = (0, len(data), len(updated))

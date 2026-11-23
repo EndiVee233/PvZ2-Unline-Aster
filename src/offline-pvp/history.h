@@ -70,7 +70,7 @@ extern "C" P offlineHistoryLookup(U b,U serial,U high){
 #endif
 #endif
  const NpcPreset*n=npc(h->target);const BusinessPlot*s=businessId(h->target);
- const U*name=n?n->name:s?s->name:nullptr;
+ const void*name=n?static_cast<const void*>(n->name):s?businessName(*s):nullptr;
 #ifdef PVP_RANDOM_NEIGHBORS
  U title[40]{};U nameIndex=U(h-economyRuntime.state.history);
  if(economyRuntime.state.historySeeds[nameIndex]){neighborName(economyRuntime.state.historySeeds[nameIndex],economyRuntime.state.historyKinds[nameIndex],title);name=title;}

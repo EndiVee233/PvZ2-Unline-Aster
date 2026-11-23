@@ -10,8 +10,9 @@ static bool produceBusinesses(Economy& next,U now){
   if(!stock.producedAt){stock.producedAt=now;changed=true;continue;}
   if(now<stock.producedAt)continue;
   U elapsed=now-stock.producedAt,coins=stock.coins,medals=stock.medals;
-  produce(stock.coins,stock.coinFraction,40,2000,elapsed);
-  produce(stock.medals,stock.medalFraction,20,2000,elapsed);
+  const auto& rules=BUSINESSES[i].rules;
+  produce(stock.coins,stock.coinFraction,rules.coinRate,rules.coinCapacity,elapsed);
+  produce(stock.medals,stock.medalFraction,rules.medalRate,rules.medalCapacity,elapsed);
   stock.producedAt=now;
   changed=changed||coins!=stock.coins||medals!=stock.medals;
  }
@@ -31,8 +32,11 @@ static void projectBusinessStocks(U b,P m){
 #endif
   if(at<U64>(p,8)!=expected)continue;
   const auto& stock=r.state.businessStocks[index];
-  at<U>(p,24)=owned?stock.medals:0;at<U>(p,28)=2000;
-  at<U>(p,32)=owned?stock.coins:0;at<U>(p,36)=2000;
-  at<U>(p,40)=expected?20:0;at<U>(p,44)=expected?40:0;
+  const auto& rules=plot->rules;
+  // An occupier retains any stock left in a captured shop. Offline rent only
+  // accrues while the current player owns it.
+  at<U>(p,24)=expected?stock.medals:0;at<U>(p,28)=rules.medalCapacity;
+  at<U>(p,32)=expected?stock.coins:0;at<U>(p,36)=rules.coinCapacity;
+  at<U>(p,40)=owned?rules.medalRate:0;at<U>(p,44)=owned?rules.coinRate:0;
  }
 }

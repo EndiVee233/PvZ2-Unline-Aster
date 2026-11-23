@@ -35,6 +35,40 @@ static void settleResearch(U b,P m){
  if(commitProgression(b,m,next))log(b,"research-completed",index,next.researchLevels[index]);
 }
 static U researchMinutes(U b){const Economy&s=economyRuntime.state;U now=realNow(b);return s.researchIndex&&s.researchDue>now?(s.researchDue-now+59)/60:0;}
+
+static U laboratoryDue(const Economy& state,U category,U now){
+ U due=0;
+ if(category==0||category==state.upgradeKind){
+  if(state.upgradeKind&&state.upgradeDue>now)due=state.upgradeDue;
+ }
+ if((category==0||category==4)&&state.evolutionIndex&&state.evolutionDue>now&&(!due||state.evolutionDue<due))due=state.evolutionDue;
+ if((category==0||category==7)&&state.researchIndex&&state.researchDue>now&&(!due||state.researchDue<due))due=state.researchDue;
+ return due;
+}
+static float laboratoryTime(U b,U category){
+ const auto& runtime=economyRuntime;
+ if(runtime.loaded&&!runtime.blocked&&runtime.user==owner(b)){
+  U now=realNow(b),due=laboratoryDue(runtime.state,category,now);
+  if(due)return at<float>(call<P>(b,0x1f7380),0x24)+float(due-now);
+ }
+ return 0x1.fffffep127f;
+}
+extern "C" float offlineLabEntryTime(U b,float stock){
+ return regular(b)?laboratoryTime(b,0):stock;
+}
+extern "C" void offlineLabCardDraw(U b,P card,P graphics,U original){
+ const U category=at<U>(card,0x1fc);
+ if(!regular(b)||(category!=4&&category!=7)){
+  call<void>(b,original,card,graphics);return;
+ }
+ P m=manager(b);
+ const U kind=at<U>(m,0x6c);const float deadline=at<float>(m,0x74);
+ // Feed only this draw the native timer fields. Building actions and other
+ // cards keep their own queue and continue to see the original fields.
+ at<U>(m,0x6c)=category;at<float>(m,0x74)=laboratoryTime(b,category);
+ call<void>(b,original,card,graphics);
+ at<U>(m,0x6c)=kind;at<float>(m,0x74)=deadline;
+}
 extern "C" U offlineResearchRemaining(U b,P ui){
  return regular(b)&&researchIndex(at<P>(ui,0xc4))<4?0:call<U>(b,0x1083754,ui);
 }

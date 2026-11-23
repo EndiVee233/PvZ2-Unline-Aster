@@ -14,7 +14,6 @@ static U replaceBusinessOpponent(U b,P panel){
  if(!id)return 1;
  U previous[40]{},title[40]{};
  if(old.shopEnemy[index])neighborName(old.shopEnemySeed[index],old.shopEnemyKind[index],previous);
- else for(U i=0;i<8;++i)previous[i]=s->name[i];
  bool different=false;U seed=0;
  for(U attempt=0;attempt<64&&!different;++attempt){
   seed=neighborRandom(rng);neighborName(seed,0,title);

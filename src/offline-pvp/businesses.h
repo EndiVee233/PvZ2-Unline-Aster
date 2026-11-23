@@ -1,10 +1,28 @@
 // First restore independent business map records and their native detail panel.
 // Ownership, garrisons and rent are deliberately separate from residential raids.
-struct BusinessPlot {U id,zone,position;U name[8];};
-static const BusinessPlot BUSINESSES[]={
- {0x71000001,3,2,{0x5496,0x5561,0x5e97,0}},
- {0x71000002,3,3,{0x5546,0x5e97,0}}
+enum class BusinessKind { HotDog, Store };
+struct BusinessRules {
+ U attackFee,coinCapacity,medalCapacity,coinRate,medalRate;
+ U threeStarCoins,defender;
+ char terrain[20];
 };
+struct BusinessPlot {U id,zone,position;BusinessKind kind;BusinessRules rules;};
+// Aster's local values. Old footage with occupied, leveled shops cannot
+// establish an empty shop's inventory, base production, or default defense.
+static const BusinessPlot BUSINESSES[]={
+ {0x71000001,3,2,BusinessKind::HotDog,{1,2000,2000,40,20,300,2,"arena_battle_test"}},
+ {0x71000002,3,3,BusinessKind::Store,{1,2000,2000,40,20,300,6,"arena_battle_test"}}
+};
+static const char32_t* businessName(const BusinessPlot& plot){
+ return plot.kind==BusinessKind::HotDog?U"热狗店":U"商店";
+}
+static void businessTitle(const BusinessPlot& plot,U* title,const U* occupier,bool own){
+ U count=0;for(auto p=businessName(plot);*p;++p)title[count++]=*p;
+ title[count++]=' ';title[count++]=0xb7;title[count++]=' ';
+ if(occupier){for(U i=0;occupier[i]&&count<39;++i)title[count++]=occupier[i];}
+ else for(auto p=own?U"自己":U"空置的小屋";*p;++p)title[count++]=*p;
+ title[count]=0;
+}
 #ifdef PVP_BUSINESS_REPLACE
 static P businessReplacePanel;
 static U businessReplaceUser;
@@ -64,8 +82,9 @@ static void projectBusinesses(U b,P m){
   if(occupied)continue;
   // Local unoccupied fixtures: no accrued funds or production before capture.
   // Capacity is a provisional local value, not a recovered server economy.
-  alignas(8) U record[16]={s.id,0,0,0,0,1,0,2000,0,2000,0,0,s.zone,s.position,1,0};
-  char alloc=0;call<void>(b,0x14eb451,reinterpret_cast<P>(record)+16,s.name,&alloc);
+  alignas(8) U record[16]={s.id,0,0,0,0,1,0,s.rules.medalCapacity,0,s.rules.coinCapacity,0,0,s.zone,s.position,1,0};
+  U title[40]{};businessTitle(s,title,nullptr,false);
+  char alloc=0;call<void>(b,0x14eb451,reinterpret_cast<P>(record)+16,title,&alloc);
   call<void>(b,0x1046a04,m,record);release(b,reinterpret_cast<P>(record[4]),true);
   log(b,"business-map-added",s.zone,s.position);
  }

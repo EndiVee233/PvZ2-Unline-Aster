@@ -226,9 +226,10 @@ static void projectBusinessOwners(U b,P m){
 #ifdef PVP_SILENT_RAIDS
   U index=businessBit(s->id)==1?0:1;
   if(!target)target=economyRuntime.state.shopEnemy[index];
-  U title[40]{};
-  if(economyRuntime.state.shopEnemy[index])neighborName(economyRuntime.state.shopEnemySeed[index],economyRuntime.state.shopEnemyKind[index],title);
-  else for(U i=0;i<8;++i)title[i]=s->name[i];
+  U occupier[40]{},title[40]{};
+  const bool other=economyRuntime.state.shopEnemy[index]!=0;
+  if(other)neighborName(economyRuntime.state.shopEnemySeed[index],economyRuntime.state.shopEnemyKind[index],occupier);
+  businessTitle(*s,title,other?occupier:nullptr,target&&!other);
   P old=at<P>(p,16);bool equal=old!=nullptr;
   for(U i=0;i<40&&equal;++i){if(at<U>(old,i*4)!=title[i])equal=false;if(!title[i])break;}
   if(!equal){P text=nullptr;char a=0;call<void>(b,0x14eb451,reinterpret_cast<P>(&text),title,&a);at<P>(p,16)=text;release(b,old,true);}
@@ -315,8 +316,8 @@ static void neighbors(U b,P m){
 #endif
  for(U i=0;i<NPC_COUNT;++i){const NpcPreset& n=NPCS[i];
 #ifdef PVP_WEEKLY_RULES
-  if(!n.evil&&economyRuntime.state.daveActive&&n.id==economyRuntime.state.daveTarget)continue;
-  if(n.evil&&!economyRuntime.state.daveActive)continue;
+  if(!n.evil&&daveHouseVisible(economyRuntime.state)&&n.id==economyRuntime.state.daveTarget)continue;
+  if(n.evil&&!daveHouseVisible(economyRuntime.state))continue;
 #endif
 #ifdef PVP_REGIONS
   if(!regionOpen(n.zone))continue;
@@ -446,7 +447,7 @@ static void apply(U b,P d,const Store&s){
 #ifdef PVP_BUSINESS_SCOUT
 static void initialBusinessFormation(U b,const BusinessPlot&s,Store&formation){
  formation=Store{};formation.user=owner(b);formation.positions=5;formation.infos=1;
- U plant=s.id==BUSINESSES[0].id?2:6;
+ U plant=s.rules.defender;
  for(U row=0;row<5;++row)formation.pos[row]={plant,row,0};
  formation.info[0].type=plant;formation.info[0].level=1;
 }
@@ -463,7 +464,8 @@ static bool localDaveAllowed(U b,P m,const NpcPreset&n){
 #ifdef PVP_WEEKLY_RULES
   // The map refreshes the schedule. Keep an already opened preview/battle
   // bound to that visitor if midnight passes while the board is active.
-  if(!economyRuntime.state.daveActive||economyRuntime.state.daveWins>=DAVE_ROUND_COUNT){economyNotice(b,"[V169_DAVE_WAIT]");return false;}
+  const Economy& visit=economyRuntime.state;
+  if(!visit.daveActive||daveDialoguePending(visit)||visit.daveWins>=DAVE_ROUND_COUNT||daveVisitSeconds(b,visit.daveRefreshDay)<=0){economyNotice(b,"[V169_DAVE_WAIT]");return false;}
 #else
   if(economyRuntime.state.daveWins>=DAVE_ROUND_COUNT){economyNotice(b,"[V66_DAVE_FINISHED]");return false;}
 #endif
@@ -489,7 +491,7 @@ extern "C" void offlineDaveLabel(U b,P record){
  U wins=economyRuntime.state.daveWins;
 #ifdef PVP_WEEKLY_RULES
  const NpcPreset*victim=npc(economyRuntime.state.daveTarget);
- if(!economyRuntime.state.daveActive||!victim||at<U>(record,0x1c)!=victim->zone||at<U>(record,0x20)!=victim->position)return;
+ if(!daveHouseVisible(economyRuntime.state)||!victim||at<U>(record,0x1c)!=victim->zone||at<U>(record,0x20)!=victim->position)return;
 #else
  if(at<U>(record,0x1c)!=n->zone||at<U>(record,0x20)!=n->position)return;
 #endif
@@ -584,7 +586,7 @@ extern "C" void offlineMapArmyPrepare(U b,P map){
  P m=manager(b);if(!regular(b)||!ensureEconomy(b,m))return;
  settleTraining(b,m);applyEconomy(b,m);
 #ifdef PVP_VISITOR_MAP_FIX
- neighbors(b,m);
+ projectGarden(b,m);
 #endif
 }
 extern "C" void offlineMapArmyReady(U b,P map){
@@ -724,16 +726,23 @@ extern "C" bool offlineScoutRewards(U b,P widget,P m){
  // Clear the unused padding byte even when the native constructor continues.
  at<unsigned char>(widget,0xef)=0;
  const NpcPreset*n=npc(arenaNpc);
- if(!n||requestedArenaView!=1||at<unsigned char>(m,0x100)!=1||arenaUser!=owner(b)||!regular(b))return false;
- if(n->evil&&arenaDaveRound>=DAVE_ROUND_COUNT)return false;
- // Use the native reward layout for residential scouts. Only shops retain
- // the production display. The first reward is a trophy for neighbors.
+#ifdef PVP_BUSINESS_BATTLE
+ const BusinessPlot* shop=businessId(arenaNpc);
+#else
+ const BusinessPlot* shop=nullptr;
+#endif
+ if((!n&&!shop)||requestedArenaView!=1||at<unsigned char>(m,0x100)!=1||arenaUser!=owner(b)||!regular(b))return false;
+ const bool dave=n&&n->evil;
+ if(dave&&arenaDaveRound>=DAVE_ROUND_COUNT)return false;
+ // The map details retain stock and production. Scouts show only the
+ // currencies the battle result actually awards at three stars.
  at<U>(widget,0x118)=1;
- at<unsigned char>(widget,0xee)=1;
- at<unsigned char>(widget,0xef)=!n->evil;
- at<U>(widget,0xf0)=n->evil?DAVE_ROUNDS[arenaDaveRound].medals:starCups(3);
- at<U>(widget,0xfc)=n->evil?0:THREE_STAR_RAID_COINS;
- if(!n->evil){
+ at<unsigned char>(widget,0xee)=!shop;
+ at<unsigned char>(widget,0xef)=n&&!dave;
+ at<U>(widget,0xf0)=dave?DAVE_ROUNDS[arenaDaveRound].medals:shop?0:starCups(3);
+ at<U>(widget,0xf4)=at<U>(widget,0xf8)=0;
+ at<U>(widget,0xfc)=dave?0:shop?shop->rules.threeStarCoins:THREE_STAR_RAID_COINS;
+ if(!dave){
   static constexpr char32_t title[]=U"3星可获得奖励";
   P heading=nullptr;char allocator=0;
   call<void>(b,0x14eb451,&heading,title,&allocator);
@@ -802,7 +811,7 @@ static bool scoutBusiness(U b,const BusinessPlot&s,bool attack){
 #endif
  )){found=true;break;}
  if(!found)return false;
- if(arenaNpc==s.id&&arenaUser==owner(b)&&arenaPending(b,"arena_battle_test",0)&&requestedArenaView==U(!attack)){
+ if(arenaNpc==s.id&&arenaUser==owner(b)&&arenaPending(b,s.rules.terrain,0)&&requestedArenaView==U(!attack)){
   log(b,"business-scout-duplicate",s.id);return true;
  }
  // Dispose the previous board before replacing its formation vectors.
@@ -817,7 +826,7 @@ static bool scoutBusiness(U b,const BusinessPlot&s,bool attack){
  I saved=readGarrison(b,s.id,formation);if(saved<0)return false;
 #endif
  apply(b,m+0x80,formation);arenaNpc=s.id;arenaUser=owner(b);
- loadArena(b,m,"arena_battle_test",0);log(b,"business-scout",s.id,plant);return true;
+ loadArena(b,m,s.rules.terrain,0);log(b,"business-scout",s.id,plant);return true;
 }
 #endif
 #ifdef PVP_BUSINESS_BATTLE
@@ -839,7 +848,7 @@ static bool attackBusiness(U b,const BusinessPlot&s){
  if(!army){at<unsigned char>(m,0x100)=1;economyNotice(b,"[V80_ARMY_REQUIRED]");return false;}
  P live=arenaModule(b);
  if(arenaNpc==s.id&&live&&at<U>(live,0xb0)==3){log(b,"business-battle-duplicate",s.id);return true;}
- if(arenaNpc==s.id&&arenaUser==owner(b)&&requestedArenaView==0&&arenaPending(b,"arena_battle_test",0))return true;
+ if(arenaNpc==s.id&&arenaUser==owner(b)&&requestedArenaView==0&&arenaPending(b,s.rules.terrain,0))return true;
  NpcPreset fee{};fee.id=s.id;
  if(arenaNpc==s.id&&live&&at<U>(live,0xb0)==2){
   if(!beginBattleFee(b,m,fee,true)){at<unsigned char>(m,0x100)=1;return false;}

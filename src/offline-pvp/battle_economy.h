@@ -17,9 +17,12 @@ static bool beginBattleFee(U b,P m,const NpcPreset&n,bool live){
  Economy next=economyRuntime.state;
  if(next.battleOpen){log(b,"battle-payment-already-open",next.battleOpen,next.battleNpc);return false;}
  U fee=1;
+#ifdef PVP_BUSINESS_BATTLE
+ if(const auto* plot=businessId(n.id))fee=plot->rules.attackFee;
+#endif
 #ifdef PVP_WEEKLY_RULES
  if(n.evil){
-  if(!next.daveActive||next.daveWins>=DAVE_ROUND_COUNT)return false;
+  if(!next.daveActive||next.daveWins>=DAVE_ROUND_COUNT||daveVisitSeconds(b,next.daveRefreshDay)<=0)return false;
   fee=DAVE_ATTACK_FEE;
  }else if(isNeighborAttack(n.id)){prepareNeighborAttackDay(b,next);fee=NEIGHBOR_ATTACK_FEE;}
 #endif
@@ -62,7 +65,11 @@ static bool closeAbandonedBattle(U b,P m){
 }
 static bool settleBattleReward(U b,Economy&next,U stars){
  if(stars>3||!paidBattleMatches(b,next))return false;
- U reward=THREE_STAR_RAID_COINS*stars/3;
+ U maximum=THREE_STAR_RAID_COINS;
+#ifdef PVP_BUSINESS_BATTLE
+ if(const auto* plot=businessId(next.battleNpc))maximum=plot->rules.threeStarCoins;
+#endif
+ U reward=maximum*stars/3;
  // The hard storage limit must not trap a completed battle in its result UI.
  if(reward>2000000000u-next.coins)reward=2000000000u-next.coins;
  next.coins+=reward;closeBattleJournal(next);return true;

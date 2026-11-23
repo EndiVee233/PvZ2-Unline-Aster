@@ -93,9 +93,12 @@ static bool validEconomy(const Economy&s,U user){
   if(s.battleSettled>s.battleSerial)return false;
  if(s.battleOpen){const NpcPreset*n=npc(s.battleNpc);bool target=n&&!n->evil;
 #ifdef PVP_BUSINESS_BATTLE
- target=target||businessId(s.battleNpc);
+ const auto* plot=businessId(s.battleNpc);target=target||plot;
 #endif
  bool fee=s.battleFee==1;
+#ifdef PVP_BUSINESS_BATTLE
+ if(plot&&s.battleFee==plot->rules.attackFee)fee=true;
+#endif
 #ifdef PVP_WEEKLY_RULES
  if(s.version>=18){
   if(n&&n->evil){target=s.daveActive==1&&s.daveWins<DAVE_ROUND_COUNT;fee=s.battleFee==DAVE_ATTACK_FEE;}
@@ -148,7 +151,8 @@ static bool validEconomy(const Economy&s,U user){
 #ifdef PVP_BUSINESS_PRODUCTION
  version=version||s.version==11;
  if(s.version>=11)for(U i=0;i<2;++i){const auto& stock=s.businessStocks[i];
-  if(stock.coins>2000||stock.medals>2000||stock.coinFraction>=3600||stock.medalFraction>=3600)return false;
+  const auto& rules=BUSINESSES[i].rules;
+  if(stock.coins>rules.coinCapacity||stock.medals>rules.medalCapacity||stock.coinFraction>=3600||stock.medalFraction>=3600)return false;
   bool retained=false;
 #ifdef PVP_SILENT_RAIDS
   retained=s.version>=16&&s.shopEnemy[i];

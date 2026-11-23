@@ -31,6 +31,11 @@ extern "C" U offlineDaveNarrativeAck(U b,P map){
  if(daveNarrativeSerial!=next.daveDialogueSerial)return 1;
  if(next.daveDialogueSeen==next.daveDialogueSerial)return 1;
  next.daveDialogueSeen=next.daveDialogueSerial;
- if(commitProgression(b,manager(b),next))log(b,"dave-dialogue-confirmed",next.daveDialogueSeen,next.daveDialogueOutcome);
+ P m=manager(b);
+ if(commitProgression(b,m,next)){
+  log(b,"dave-dialogue-confirmed",next.daveDialogueSeen,next.daveDialogueOutcome);
+  projectGarden(b,m);
+  call<void>(b,0x100a864,map);
+ }else daveNarrativeMap=nullptr;
  return 1;
 }

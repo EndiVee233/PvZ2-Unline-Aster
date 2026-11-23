@@ -55,6 +55,8 @@ def verify(engine, report, base, pool, plants):
     awards = []
     draw_calls = []
     checkmark, reward_image = STACK + 0x9000, STACK + 0x9100
+    small_font = STACK + 0x9200
+    write_word(emu, APP + 0x2c0, small_font)
     write_word(emu, checkmark + 0x28, 90)
     write_word(emu, checkmark + 0x2c, 70)
     write_word(emu, reward_image + 0x28, 64)
@@ -74,6 +76,7 @@ def verify(engine, report, base, pool, plants):
     owned = {}
     key_balances = {}
     fail_grant = False
+    paid_saves = []
     accessory_record = OBJECTS + 0xc00
     costume_record = OBJECTS + 0xd00
     costume_count = OBJECTS + 0xe00
@@ -171,18 +174,38 @@ def verify(engine, report, base, pool, plants):
         elif site == 0x13af2d0:
             sp = uc.reg_read(UC_ARM_REG_SP)
             entry = read_word(uc, read_word(uc, sp + 4))
-            draw_calls.append(wide_strings[entry])
+            text = wide_strings[entry]
+            if not text.startswith("×"):
+                available, = struct.unpack("<f", uc.mem_read(sp, 4))
+                glyph_width = 16 if arg == small_font else 20
+                assert len(text) * glyph_width <= available, (text, available)
+            draw_calls.append(text)
+            result = 0
+        elif site == 0x13ae4f0:
+            entry = read_word(uc, uc.reg_read(UC_ARM_REG_R1))
+            result = len(wide_strings[entry]) * (16 if arg == small_font else 20)
+        elif site == 0x747d00:
+            assert arg == active and uc.mem_read(MANAGER + 0x81, 1) == b"\1"
+            amount = uc.reg_read(UC_ARM_REG_R1)
+            assert amount == 10 and read_word(uc, active + 0xa0) >= amount
+            write_word(uc, active + 0xa0, read_word(uc, active + 0xa0) - amount)
+            reserve = read_word(uc, active + 0xb8)
+            write_word(uc, active + 0xb8, max(0, reserve - amount))
+            result = 0
+        elif site == 0x712484:
+            assert arg == active and uc.mem_read(MANAGER + 0x81, 1) == b"\0"
+            paid_saves.append(read_word(uc, active + 0x3a0))
             result = 0
         elif site == 0x11698b4:
             image = uc.reg_read(UC_ARM_REG_R1)
             x, y = (uc.reg_read(reg) for reg in (UC_ARM_REG_R2, UC_ARM_REG_R3))
             width, height = struct.unpack("<2I", uc.mem_read(uc.reg_read(UC_ARM_REG_SP), 8))
             if image == checkmark:
-                assert (x, y, width, height) == (28, 69, 45, 35)
+                assert (x, y, width, height) == (31, 67, 49, 38)
                 draw_calls.append("checkmark")
             else:
                 assert image == reward_image
-                assert (x, y, width, height) == (24, 28, 52, 52)
+                assert (x, y, width, height) in ((29, 28, 52, 52), (37, 43, 36, 36))
                 draw_calls.append("reward image")
             result = 0
         elif site in (0x708e18, 0x708890, 0x706da0):
@@ -195,12 +218,17 @@ def verify(engine, report, base, pool, plants):
         elif site in (0x746164, 0x745220, 0x729ebc, 0x744554, 0x7233ec, 0x722624,
                       0x717c24, 0x729e8c, 0x7492d4, 0x729440):
             assert arg == active
-            assert uc.mem_read(active + 0x3a4, 1) == b"\1"
+            assert uc.mem_read(MANAGER + 0x81, 1) == b"\1"
             first = uc.reg_read(UC_ARM_REG_R1)
             second = uc.reg_read(UC_ARM_REG_R2)
             if site in (0x746164, 0x745220):
                 if site == 0x745220:
-                    assert second == 0
+                    assert second in (0, 1)
+                    if second:
+                        assert first == 10 and fail_grant
+                        write_word(uc, active + 0xa0, read_word(uc, active + 0xa0) + first)
+                        uc.reg_write(UC_ARM_REG_PC, uc.reg_read(UC_ARM_REG_LR))
+                        return
                 model_grant(arg, 0x98 if site == 0x746164 else 0xa0, first)
             else:
                 name = read_string(uc, read_word(uc, first))
@@ -250,8 +278,8 @@ def verify(engine, report, base, pool, plants):
         emu.reg_write(UC_ARM_REG_R6, entry)
         run(0xf68f58, entry)
 
-    def expected_day(*, duplicate=False):
-        day = pool[clock.month - 1][clock.day - 1]
+    def expected_day(slot, *, duplicate=False):
+        day = pool[clock.month - 1][slot - 1]
         name, amount = day["name"], day["amount"]
         if name == "金币":
             return "", 0, amount, (0x98, amount), name
@@ -275,113 +303,128 @@ def verify(engine, report, base, pool, plants):
                 return alias, 9, amount, ((kind, alias), amount), name
         raise AssertionError(day)
 
-    def check_tile(entry, *, claimed=False, duplicate=False):
+    def check_tile(entry, slot, *, claimed=False, duplicate=False):
         alias, kind, amount = struct.unpack("<3I", emu.mem_read(entry, 12))
-        expected_alias, expected_kind, expected_amount, _, item = expected_day(duplicate=duplicate)
+        expected_alias, expected_kind, expected_amount, _, item = expected_day(slot, duplicate=duplicate)
         assert (read_string(emu, alias), kind, amount) == (expected_alias, expected_kind, expected_amount), clock
+        current = run(report["symbols"]["asterDailySignCurrentSlot"])
+        if current != slot:
+            run(report["symbols"]["asterDailySignTile"], base, tile, entry + (current - slot) * 12)
         run(report["symbols"]["asterDailySignTile"], base, tile, entry)
-        write_word(emu, tile + 0xd8, clock.day - 1)
-        write_word(emu, tile + 0x30, 100)
+        write_word(emu, tile + 0xd8, slot - 1)
+        write_word(emu, tile + 0x30, 110)
         write_word(emu, tile + 0x34, 120)
         draw_regs, draw_stack = OBJECTS + 0xa00, OBJECTS + 0xb00
         emu.mem_write(draw_regs, struct.pack("<IIffI", APP, 0, 0, 14, tile))
-        emu.mem_write(draw_stack, struct.pack("<f4I", 100, tile + 0xc8, 1, 0, 0))
+        emu.mem_write(draw_stack, struct.pack("<f4I", 110, tile + 0xc8, 1, 0, 0))
         run(report["symbols"]["asterDailySignDraw"], base, draw_regs, draw_stack)
-        expected = ["reward image", item, f"×{amount}"]
-        if claimed:
-            expected.append("checkmark")
-        assert draw_calls == expected, (clock, draw_calls)
+        assert draw_calls[0] == "reward image"
+        assert draw_calls[-1] == ("checkmark" if claimed else f"×{amount}"), (clock, draw_calls)
+        lines = draw_calls[1:-2] if claimed else draw_calls[1:-1]
+        assert "".join(lines) == item, (clock, draw_calls)
         draw_calls.clear()
 
-    def today_entry():
+    def entry_for(slot):
         start, days = open_panel()
         assert days == monthrange(clock.year, clock.month)[1]
-        assert read_word(emu, active + 0x3a0) == clock.day
-        return start + (clock.day - 1) * 12
+        return start + (slot - 1) * 12
 
     def change_player(player, user):
         nonlocal active
         active = player
         write_word(emu, MANAGER + 0x74, user)
 
-    clock = date(2028, 2, 28)
-    first = today_entry()
-    check_tile(first)
-    claim(first)
-    claim(first)
-    assert awards == [expected_day()[3]]
-    check_tile(today_entry(), claimed=True)
-    assert emu.mem_read(PLAYER + 0x3c8, 1) == b"\1"
+    def saved_progress():
+        value = read_word(emu, active + 0x3a0)
+        assert value >> 24 == 0x53
+        return (value >> 5) & 31, value & 31
 
-    clock = date(2028, 2, 29)
+    def makeup():
+        return run(report["symbols"]["asterDailySignMakeupCommit"], base, active)
+
+    def available():
+        return run(report["symbols"]["asterDailySignAvailable"], base, active)
+
+    clock = date(2028, 11, 23)
+    write_word(emu, PLAYER + 0xa0, 9)
+    first = entry_for(1)
+    check_tile(first, 1)
+    assert available() and not makeup()
+    claim(first + 12)
+    assert not awards
     claim(first)
-    assert len(awards) == 1
-    next_entry = today_entry()
     claim(first)
-    assert len(awards) == 1
-    claim(next_entry)
-    assert awards[-1] == expected_day()[3] and len(awards) == 2
+    assert awards == [expected_day(1)[3]]
+    assert saved_progress() == (1, 23) and not available()
+    check_tile(entry_for(1), 1, claimed=True)
+    assert not makeup()
+    write_word(emu, PLAYER + 0xa0, 40)
+    write_word(emu, PLAYER + 0xb8, 8)
+    fail_grant = True
+    assert not makeup() and saved_progress() == (1, 23)
+    assert read_word(emu, PLAYER + 0xa0) == 40 and read_word(emu, PLAYER + 0xb8) == 8
+    assert not paid_saves
+    fail_grant = False
+    assert makeup() and awards[-1] == expected_day(2)[3]
+    assert saved_progress() == (2, 23)
+    assert read_word(emu, PLAYER + 0xa0) == 30
+    assert paid_saves == [read_word(emu, PLAYER + 0x3a0)]
+    check_tile(entry_for(2), 2, claimed=True)
+    clock = date(2028, 11, 22)
+    assert not available() and not makeup()
+    clock = date(2028, 11, 24)
+    assert available()
+    claim(entry_for(3))
+    assert awards[-1] == expected_day(3)[3] and saved_progress() == (3, 24)
 
     change_player(OTHER, 11)
-    claim(next_entry, PLAYER)
-    claim(next_entry)
-    assert len(awards) == 2
-    entry = today_entry()
-    write_word(emu, OTHER + 0xa0, 0x7fffffff)
-    claim(entry)
-    assert len(awards) == 2 and emu.mem_read(OTHER + 0x3a4, 1) == b"\0"
-    write_word(emu, OTHER + 0xa0, 0)
-    fail_grant = True
-    claim(entry)
-    assert emu.mem_read(OTHER + 0x3a4, 1) == b"\0"
-    assert read_word(emu, OTHER + 0xa0) == 0
-    fail_grant = False
-    claim(entry)
-    assert emu.mem_read(OTHER + 0x3a4, 1) == b"\1"
-    assert read_word(emu, OTHER + 0xa0) == expected_day()[2]
+    previous = len(awards)
+    claim(first, PLAYER)
+    assert not makeup() and len(awards) == previous
+    clock = date(2029, 3, 2)
+    write_word(emu, OTHER + 0xa0, 20)
+    claim(entry_for(1))
+    assert makeup() and saved_progress() == (2, 2)
+    assert not makeup() and not available()
 
-    clock = date(2028, 2, 28)
-    old_shown = shown
-    run(report["symbols"]["asterDailySignOpen"], base)
-    assert shown == old_shown
-    clock = date(2028, 3, 1)
-    claim(today_entry())
-    assert awards[-1] == expected_day()[3]
-
-    for month, day, kind, alias in [(1, 2, "plant", "wintersweet"), (11, 19, "costume", "broccoli")]:
-        clock = date(2029, month, day)
-        owned.setdefault(OTHER, set()).add((kind, alias))
-        entry = today_entry()
-        check_tile(entry, duplicate=True)
-        claim(entry)
-        assert awards[-1] == expected_day(duplicate=True)[3]
-        owned[OTHER].clear()
-
-    # A restored, already claimed profile must retain its marker before any award.
-    clock = date(2030, 2, 28)
+    # Legacy date-based claims keep their grants and consume that day's free sign-in.
+    clock = date(2029, 4, 12)
+    write_word(emu, OTHER + 0x3a0, clock.day)
     write_word(emu, OTHER + 0x3b4, (clock - EPOCH).days * 86400)
-    before = len(awards)
-    claim(today_entry())
-    assert len(awards) == before
-    clock = date(2030, 3, 1)
-    claim(today_entry())
-    assert len(awards) == before + 1
+    emu.mem_write(OTHER + 0x3a4, b"\1")
+    first = entry_for(1)
+    previous = len(awards)
+    assert not available()
+    claim(first)
+    assert len(awards) == previous
+    clock = date(2029, 4, 13)
+    claim(entry_for(1))
+    assert awards[-1] == expected_day(1)[3] and saved_progress() == (1, 13)
+
+    clock = date(2030, 3, 3)
+    write_word(emu, OTHER + 0xa0, 20)
+    claim(entry_for(1))
+    assert makeup() and read_word(emu, OTHER + 0xa0) == 10
+    assert makeup() and awards[-1] == (0xa0, 50)
+    assert read_word(emu, OTHER + 0xa0) == 50 and saved_progress() == (3, 3)
+    assert not makeup()
 
     for year in (2032, 2033):
         for month in range(1, 13):
             for day in range(1, monthrange(year, month)[1] + 1):
                 clock = date(year, month, day)
                 owned[OTHER] = set()
-                entry = today_entry()
-                check_tile(entry)
+                entry = entry_for(day)
+                check_tile(entry, day)
                 awards.clear()
                 claim(entry)
-                assert awards == [expected_day()[3]], clock
+                assert awards == [expected_day(day)[3]], clock
+                assert saved_progress() == (day, day), clock
 
     # Shop keys use the native 99 limit and must reject a partial bundle.
     clock = date(2034, 3, 1)
     key_balances[OTHER, "egypt"] = 98
-    entry = today_entry()
+    entry = entry_for(1)
     awards.clear()
     claim(entry)
     assert not awards and key_balances[OTHER, "egypt"] == 98

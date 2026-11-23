@@ -44,15 +44,31 @@ static constexpr unsigned signIndex = 0x3a0;
 static constexpr unsigned signClaimed = 0x3a4;
 static constexpr unsigned signDate = 0x3b4;
 static constexpr unsigned signTileClaimed = 0x3c8;
+static constexpr unsigned makeupPrice = 10;
+// Store the month, claimed prefix and last free day together in the native
+// profile's saved sign-in counter. Older versions used an untagged day number.
+static constexpr unsigned progressTag = 0x53000000;
+struct SignProgress { int count, freeDay; };
 static constexpr unsigned noOwner = ~0U;
 static constexpr char claimMarkKey[] = "IMAGE_EFFECTS_SIGNREWARD_GET_SIGNREWARD_GET_136X106";
 static Reward rewards[31];
 static DayReward resolvedRewards[31];
 static const char* nativeAliases[unsigned(Item::Count)];
-struct TileLabels { const char32_t* lines[2]; };
+struct TileLabels {
+    const char32_t* title;
+    const char32_t* amount;
+    const char32_t* firstLine;
+    const char32_t* secondLine;
+    Object stockFont;
+    Object fittedFont;
+    int fittedWidth;
+    bool split;
+};
 static TileLabels tileLabels[31];
 static Object claimMark;
-static bool calendarClaimed;
+static Object makeupDialog;
+static Object makeupButton;
+static SignProgress progress;
 static Calendar calendar;
 static unsigned calendarOwner = noOwner;
 static Object calendarPlayer;
@@ -68,6 +84,11 @@ static Object profile(Address base) {
     if (owner(base) == noOwner) return nullptr;
     Object store = native<Object>(base, 0x1df738);
     return store ? native<Object>(base, 0x7a98dc, store) : nullptr;
+}
+
+static Object gameApp(Address base) {
+    const auto holder = field<Object>(reinterpret_cast<Object>(base), 0x1821674);
+    return holder ? field<Object>(holder, 0) : nullptr;
 }
 
 static bool localDate(Address base, Seconds when, CivilDate& date) {
@@ -88,6 +109,47 @@ static int monthLength(const CivilDate& date) {
     return lengths[date.month - 1] +
         (date.month == 2 && date.year % 4 == 0 &&
          (date.year % 100 != 0 || date.year % 400 == 0));
+}
+
+static bool readProgress(Address base, Object player, const CivilDate& today, SignProgress& out) {
+    const unsigned saved = field<unsigned>(player, signIndex);
+    if ((saved & 0xff000000U) != progressTag) {
+        CivilDate previous{};
+        const bool hasDate = localDate(base, field<Seconds>(player, signDate), previous);
+        if (hasDate && previous.dayKey() > today.dayKey()) return false;
+        const bool usedFree = hasDate && previous.dayKey() == today.dayKey() &&
+            field<unsigned char>(player, signClaimed);
+        out = {0, usedFree ? today.day : 0};
+        return true;
+    }
+    const int month = 2020 * 12 + 1 + int((saved & 0x00ffffffU) >> 10);
+    if (month > today.monthKey()) return false;
+    if (month != today.monthKey()) {
+        out = {0, 0};
+        return true;
+    }
+    out = {int((saved >> 5) & 31), int(saved & 31)};
+    return out.count <= today.day && out.freeDay <= today.day;
+}
+
+static void storeProgress(Object player, const CivilDate& today, SignProgress next) {
+    const unsigned month = today.monthKey() - (2020 * 12 + 1);
+    field<unsigned>(player, signIndex) = progressTag | (month << 10) | (unsigned(next.count) << 5) | next.freeDay;
+}
+
+static bool freeAvailable(const CivilDate& date, SignProgress state) {
+    return state.count < date.day && state.freeDay != date.day;
+}
+
+static bool makeupAvailable(const CivilDate& date, SignProgress state) {
+    return state.count < date.day && state.freeDay == date.day;
+}
+
+extern "C" bool asterDailySignAvailable(Address base, Object player) {
+    CivilDate today{};
+    SignProgress state{};
+    return player && localDate(base, now(base), today) && today.year >= 2020 &&
+        readProgress(base, player, today, state) && freeAvailable(today, state);
 }
 
 static const DayReward* monthRewards(const CivilDate& date) {
@@ -133,35 +195,33 @@ static void releaseLabel(Address base, const char32_t*& label) {
     label = nullptr;
 }
 
-static bool prepareCalendar(Address base, Object player, Seconds when) {
-    CivilDate today{}, previous{};
-    if (!localDate(base, when, today) || today.year < 2020) return false;
-    const bool hasPrevious = localDate(base, field<Seconds>(player, signDate), previous);
-    if (hasPrevious && previous.dayKey() > today.dayKey()) return false;
+static void releaseTileLabels(Address base, TileLabels& labels) {
+    releaseLabel(base, labels.title);
+    releaseLabel(base, labels.amount);
+    releaseLabel(base, labels.firstLine);
+    releaseLabel(base, labels.secondLine);
+    labels.stockFont = nullptr;
+}
 
-    const bool sameDay = hasPrevious && previous.dayKey() == today.dayKey();
+static bool prepareCalendar(Address base, Object player, Seconds when) {
+    CivilDate today{};
+    SignProgress state{};
+    if (!localDate(base, when, today) || today.year < 2020 || !readProgress(base, player, today, state))
+        return false;
     const int days = monthLength(today);
-    field<int>(player, signIndex) = today.day;
-    auto& claimed = field<unsigned char>(player, signClaimed);
-    if (!sameDay) {
-        claimed = 0;
-        field<Seconds>(player, signDate) = when;
-    }
-    field<unsigned char>(player, signTileClaimed) = claimed;
+    const bool claimUnavailable = !freeAvailable(today, state);
+    field<unsigned char>(player, signClaimed) = claimUnavailable;
+    field<unsigned char>(player, signTileClaimed) = claimUnavailable;
 
     const unsigned user = owner(base);
-    const bool samePanelDay = calendarDay == today.dayKey() && calendarOwner == user && calendarPlayer == player;
-    if (calendar.year != today.year || calendar.month != today.month || calendarPlayer != player) {
-        for (auto& tile : tileLabels) {
-            for (auto& line : tile.lines) releaseLabel(base, line);
-        }
-    }
+    const bool sameMonth = calendar.year == today.year && calendar.month == today.month &&
+        calendarOwner == user && calendarPlayer == player;
     const DayReward* month = monthRewards(today);
     for (int index = 0; index < days; ++index) {
-        if (samePanelDay && claimed && index + 1 == today.day) continue;
-        const DayReward day = resolveReward(base, player, month[index]);
+        if (sameMonth && index < state.count) continue;
+        const DayReward day = index < state.count ? month[index] : resolveReward(base, player, month[index]);
         if (!sameReward(day, resolvedRewards[index])) {
-            for (auto& line : tileLabels[index].lines) releaseLabel(base, line);
+            releaseTileLabels(base, tileLabels[index]);
         }
         resolvedRewards[index] = day;
         rewards[index] = {nativeAlias(base, day.item), tileKind(day.kind), day.amount};
@@ -177,14 +237,14 @@ static bool prepareCalendar(Address base, Object player, Seconds when) {
     calendarOwner = user;
     calendarPlayer = player;
     calendarDay = today.dayKey();
-    calendarClaimed = claimed;
+    progress = state;
+    claimMark = nullptr;
     return true;
 }
 
 extern "C" void asterDailySignOpen(Address base) {
     Object player = profile(base);
-    Address holder = field<Address>(reinterpret_cast<Object>(base), 0x1821674);
-    Object app = holder ? field<Object>(reinterpret_cast<Object>(holder), 0) : nullptr;
+    Object app = gameApp(base);
     if (!player || !app || openingCalendar || !prepareCalendar(base, player, now(base))) return;
     openingCalendar = true;
     native<unsigned>(base, 0x4184f8, app);
@@ -197,6 +257,13 @@ extern "C" Calendar* asterDailySignOpeningConfig(Address) {
 
 extern "C" Calendar* asterDailySignConfig(Address) {
     return &calendar;
+}
+
+extern "C" int asterDailySignCurrentSlot() {
+    if (!calendar.begin) return 0;
+    const int days = calendar.end - calendar.begin;
+    const int slot = progress.count + 1;
+    return slot < days ? slot : days;
 }
 
 static char32_t* writeLabel(char32_t* target, const char32_t* prefix, unsigned amount) {
@@ -216,15 +283,21 @@ static void makeLabel(Address base, const char32_t** output, const char32_t* tex
     native<void>(base, 0x14eb451, output, text, &allocator);
 }
 
-static Object rewardImage(Address base, const char* key) {
+struct ImageSkin { unsigned drawMode; Object image; unsigned options[6]; };
+
+static void resolveSkin(Address base, ImageSkin& skin, const char* key, unsigned mode) {
     struct ImageDescriptor { unsigned reserved[3]; const char* key; unsigned ref[2]; };
     ImageDescriptor descriptor;
     descriptor.key = key;
     descriptor.ref[0] = descriptor.ref[1] = 0;
-    struct ImageSkin { unsigned drawMode; Object image; unsigned options[6]; } skin;
     skin.image = nullptr;
-    native<void>(base, 0x7e8a28, &skin, &descriptor, 2U);
+    native<void>(base, 0x7e8a28, &skin, &descriptor, mode);
     native<void>(base, 0x1d9bb4, &descriptor.ref, 0U, 0U, 0U);
+}
+
+static Object rewardImage(Address base, const char* key) {
+    ImageSkin skin;
+    resolveSkin(base, skin, key, 2U);
     return skin.image;
 }
 
@@ -240,27 +313,35 @@ extern "C" void asterDailySignTile(Address base, Object tile, const Reward* rewa
         if (const auto image = rewardImage(base, costume ? item.costumeIcon : item.icon))
             field<Object>(tile, 0xa4) = image;
     }
-    if (index + 1 == calendarDay % 32)
+    if (index + 1 == asterDailySignCurrentSlot())
         claimMark = rewardImage(base, claimMarkKey);
     char32_t text[24];
     auto& labels = tileLabels[index];
-    if (!labels.lines[0]) {
+    if (!labels.title) {
         char32_t* name = text;
         for (const auto* c = item.name; *c; ++c) *name++ = *c;
+        char32_t* split = name;
         static constexpr char32_t suffixes[][5] = {
             U"", U"", U"", U"整株", U"碎片", U"装扮", U"装扮碎片", U"", U"",
         };
         const char32_t* suffix = suffixes[unsigned(day.kind)];
         while (*suffix) *name++ = *suffix++;
         *name = 0;
-        makeLabel(base, &labels.lines[0], text);
+        makeLabel(base, &labels.title, text);
+        if (name - text > 5) {
+            if (day.kind == Kind::AccessoryShard && name - text == 7) split = name - 2;
+            if (split == name || split - text > 5) split = text + (name - text + 1) / 2;
+            makeLabel(base, &labels.secondLine, split);
+            *split = 0;
+            makeLabel(base, &labels.firstLine, text);
+        }
         *writeLabel(text, U"×", day.amount) = 0;
-        makeLabel(base, &labels.lines[1], text);
+        makeLabel(base, &labels.amount, text);
     }
 }
 
 struct DrawRegisters {
-    Object app;
+    Object font;
     Object graphics;
     float x;
     float y;
@@ -274,30 +355,6 @@ struct DrawStack {
     Object style;
     unsigned flags;
 };
-
-extern "C" void asterDailySignPaper(Address base, Object graphics, const int* frame, Object texture) {
-    native<void>(base, 0x9734b0, graphics, frame, texture);
-    struct Color { int red, green, blue, alpha; };
-    const Color previous = field<Color>(graphics, 0x4c);
-    const Color paper{201, 183, 149, 255};
-    const int border = 4;
-    const int x = frame[0] + border;
-    const int y = frame[1] + border;
-    const int width = frame[2] - border * 2;
-    const int height = frame[3] - border * 2;
-    if (width <= 16 || height <= 16) return;
-    native<void>(base, 0x1166c30, graphics, &paper);
-    // Follow the rounded corners of the original inset.
-    constexpr int corners[] = {6, 4, 3, 2, 1, 1};
-    constexpr int radius = sizeof(corners) / sizeof(corners[0]);
-    native<void>(base, 0x1167010, graphics, x, y + radius, width, height - radius * 2);
-    for (int row = 0; row < radius; ++row) {
-        const int inset = corners[row];
-        native<void>(base, 0x1167010, graphics, x + inset, y + row, width - inset * 2, 1);
-        native<void>(base, 0x1167010, graphics, x + inset, y + height - row - 1, width - inset * 2, 1);
-    }
-    native<void>(base, 0x1166c30, graphics, &previous);
-}
 
 static void drawRewardImage(Address base, Object graphics, Object image,
                             int centerX, int centerY, int maxWidth, int maxHeight) {
@@ -314,24 +371,51 @@ static void drawRewardImage(Address base, Object graphics, Object image,
                  drawnWidth, drawnHeight);
 }
 
+static void fitTitle(Address base, TileLabels& labels, Object stockFont, int width) {
+    if (labels.stockFont == stockFont && labels.fittedWidth == width) return;
+    labels.stockFont = stockFont;
+    labels.fittedWidth = width;
+    Object font = stockFont;
+    int measured = native<int>(base, 0x13ae4f0, font, &labels.title);
+    const int minimum = measured * 4 / 5;
+    while (measured > width) {
+        const Object smaller = field<Object>(font, 0x2c0);
+        if (!smaller) break;
+        const int nextWidth = native<int>(base, 0x13ae4f0, smaller, &labels.title);
+        if (nextWidth < minimum || nextWidth >= measured) break;
+        measured = nextWidth;
+        font = smaller;
+    }
+    labels.split = measured > width && labels.secondLine;
+    labels.fittedFont = font;
+}
+
 extern "C" void asterDailySignDraw(Address base, const DrawRegisters& args, const DrawStack& stack) {
-    auto draw = [&](float y, const char32_t* const* text) {
-        native<void>(base, 0x13af2d0, args.app, args.graphics, args.x, y, stack.width,
+    auto draw = [&](Object font, float y, const char32_t* const* text, float inset = 0.0f) {
+        native<void>(base, 0x13af2d0, font, args.graphics, args.x + inset, y, stack.width - 2 * inset,
                      text, stack.alignment, stack.style, stack.flags);
     };
     const int index = field<int>(args.tile, 0xd8);
     if (index < 0 || index >= calendar.end - calendar.begin) {
-        draw(args.y, stack.text);
+        draw(args.font, args.y, stack.text);
         return;
     }
-    const auto& labels = tileLabels[index];
+    auto& labels = tileLabels[index];
     const int width = field<int>(args.tile, 0x30);
     const int height = field<int>(args.tile, 0x34);
+    const int inset = width / 10;
+    fitTitle(base, labels, args.font, width - inset * 2);
     drawRewardImage(base, args.graphics, field<Object>(args.tile, 0xa4),
-                    width / 2, height * 45 / 100, width * 68 / 100, height * 44 / 100);
-    draw(args.y, &labels.lines[0]);
-    draw(height * 0.65f, &labels.lines[1]);
-    if (calendarClaimed && index + 1 == calendarDay % 32) {
+                    width / 2, height * (labels.split ? 51 : 45) / 100,
+                    width * 68 / 100, height * (labels.split ? 30 : 44) / 100);
+    if (labels.split) {
+        draw(labels.fittedFont, args.y, &labels.firstLine, inset);
+        draw(labels.fittedFont, args.y + height * 0.13f, &labels.secondLine, inset);
+    } else {
+        draw(labels.fittedFont, args.y, &labels.title, inset);
+    }
+    draw(args.font, height * 0.65f, &labels.amount);
+    if (index < progress.count) {
         drawRewardImage(base, args.graphics, claimMark, width / 2, height * 72 / 100,
                         width * 45 / 100, height * 36 / 100);
     }
@@ -342,6 +426,18 @@ static unsigned walletBalance(Object player, unsigned offset) {
     const unsigned encoded = field<unsigned>(player, offset);
     const unsigned shift = salt & 31;
     return ((encoded >> shift) | (encoded << ((32 - shift) & 31))) ^ salt;
+}
+
+template<class... A> static void widgetCall(Object widget, unsigned slot, A... args) {
+    field<void(*)(Object, A...)>(field<Object>(widget, 0), slot)(widget, args...);
+}
+
+static void updateMakeupButton(const CivilDate& today) {
+    if (makeupButton) {
+        const bool enabled = makeupAvailable(today, progress) &&
+            walletBalance(calendarPlayer, 0xa0) >= makeupPrice;
+        widgetCall(makeupButton, 0xa4, unsigned(!enabled));
+    }
 }
 
 static unsigned plantBalance(Object player, unsigned plantId) {
@@ -413,31 +509,99 @@ static void grant(Address base, Object player, DayReward day, const char* const*
     }
 }
 
-extern "C" bool asterDailySignCommit(Address base, Object player, const Reward* reward) {
-    CivilDate today{}, claimedDate{};
+static bool commit(Address base, Object player, const Reward* reward, bool makeup) {
+    CivilDate today{};
+    SignProgress saved{};
     if (!player || player != calendarPlayer || calendarOwner == noOwner ||
         owner(base) != calendarOwner || profile(base) != player ||
         !localDate(base, now(base), today) || today.dayKey() != calendarDay ||
-        !localDate(base, field<Seconds>(player, signDate), claimedDate) || claimedDate.dayKey() != calendarDay ||
-        field<unsigned char>(player, signClaimed)) return false;
-    const int index = field<int>(player, signIndex);
-    if (index != today.day || index > calendar.end - calendar.begin || reward != rewards + index - 1)
-        return false;
-    const DayReward day = resolveReward(base, player, monthRewards(today)[index - 1]);
-    if (!sameReward(day, resolvedRewards[index - 1]) || day.kind == Kind::None) return false;
+        !readProgress(base, player, today, saved) ||
+        saved.count != progress.count || saved.freeDay != progress.freeDay) return false;
+    if (!(makeup ? makeupAvailable(today, saved) : freeAvailable(today, saved))) return false;
+    const int index = saved.count;
+    if (reward != rewards + index) return false;
+    const DayReward day = resolveReward(base, player, monthRewards(today)[index]);
+    if (!sameReward(day, resolvedRewards[index]) || day.kind == Kind::None) return false;
+    const unsigned gems = walletBalance(player, 0xa0);
+    if (makeup && gems < makeupPrice) return false;
+    const unsigned gemReserve = field<unsigned>(player, 0xb8);
     const unsigned before = balance(base, player, day, &reward->alias);
+    const unsigned expectedBefore = makeup && day.kind == Kind::Diamonds ? before - makeupPrice : before;
     const unsigned limit = day.kind == Kind::WorldKey ? 99 : 0x7fffffffU;
-    if (before > limit - day.amount) return false;
+    if (expectedBefore > limit - day.amount) return false;
 
-    // These inventory changes and the claim flags belong to the same native profile.
-    field<unsigned char>(player, signClaimed) = 1;
-    field<unsigned char>(player, signTileClaimed) = 1;
-    grant(base, player, day, &reward->alias);
-    if (balance(base, player, day, &reward->alias) != before + day.amount) {
-        field<unsigned char>(player, signClaimed) = 0;
-        field<unsigned char>(player, signTileClaimed) = 0;
+    // The native store has a save suppression flag. Let the usual award and
+    // wallet methods notify the HUD, then save both changes with the progress.
+    const Object store = native<Object>(base, 0x1df738);
+    if (!store || field<unsigned char>(store, 0x81)) return false;
+    field<unsigned char>(store, 0x81) = 1;
+    if (makeup && native<int>(base, 0x747d00, player, makeupPrice) < 0) {
+        field<unsigned char>(store, 0x81) = 0;
         return false;
     }
-    calendarClaimed = true;
+    grant(base, player, day, &reward->alias);
+    if (balance(base, player, day, &reward->alias) != expectedBefore + day.amount) {
+        if (makeup) {
+            native<void>(base, 0x745220, player, makeupPrice, 1U);
+            field<unsigned>(player, 0xb8) = gemReserve;
+        }
+        field<unsigned char>(store, 0x81) = 0;
+        return false;
+    }
+    progress = {index + 1, makeup ? saved.freeDay : today.day};
+    storeProgress(player, today, progress);
+    field<unsigned char>(player, signClaimed) = 1;
+    field<unsigned char>(player, signTileClaimed) = 1;
+    field<unsigned char>(store, 0x81) = 0;
+    // The stock free path calls this profile commit after the hook returns.
+    // The footer action runs the same commit to mark the sign-in save dirty.
+    if (makeup) native<void>(base, 0x712484, player);
+    updateMakeupButton(today);
     return true;
+}
+
+extern "C" bool asterDailySignCommit(Address base, Object player, const Reward* reward) {
+    return commit(base, player, reward, false);
+}
+
+extern "C" bool asterDailySignMakeupCommit(Address base, Object player) {
+    return commit(base, player, rewards + progress.count, true);
+}
+
+extern "C" void asterDailySignMakeupClick(Address base, Object dialog) {
+    const Object app = gameApp(base);
+    if (app && dialog == makeupDialog && field<Object>(app, 0x1248) == dialog)
+        asterDailySignMakeupCommit(base, profile(base));
+}
+
+extern "C" void asterDailySignFooter(Address base, Object dialog) {
+    const Object app = gameApp(base);
+    const Object scroll = field<Object>(dialog, 0xa8);
+    if (!app || !scroll) return;
+    makeupDialog = dialog;
+    const auto button = native<Object>(base, 0x14c1a7d, 0x1f8U);
+    if (!button) {
+        makeupButton = nullptr;
+        return;
+    }
+    const char32_t* text = nullptr;
+    makeLabel(base, &text, U"补签  10钻石");
+    unsigned color[4];
+    native<void>(base, 0x112f868, color, 1U);
+    native<void>(base, 0x7e8db4, button, 1U, dialog + 0xa4, &text, color);
+    releaseLabel(base, text);
+    ImageSkin normal, pressed;
+    resolveSkin(base, normal, "IMAGE_UI_GENERIC_PURPLEBUTTON", 3U);
+    resolveSkin(base, pressed, "IMAGE_UI_GENERIC_PURPLEBUTTON_DOWN", 3U);
+    if (normal.image) native<void>(base, 0x7e90dc, button, &normal, pressed.image ? &pressed : &normal);
+    const float scale = field<float>(app, 0x698);
+    const int width = int(186 * scale);
+    const int height = int(53 * scale);
+    const int x = (field<int>(dialog, 0x30) - width) / 2;
+    const int y = field<int>(scroll, 0x2c) + field<int>(scroll, 0x34) + int(15 * scale);
+    widgetCall(button, 0xac, x, y, width, height);
+    widgetCall(dialog, 0x10, button);
+    makeupButton = button;
+    CivilDate today{};
+    if (localDate(base, now(base), today)) updateMakeupButton(today);
 }

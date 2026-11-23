@@ -1,4 +1,4 @@
-"""Update the A313 ARM32 calendar using Aster's existing reward card art."""
+"""Build the sequential A315 ARM32 calendar over the A313 baseline."""
 import argparse
 from hashlib import sha256
 import json
@@ -25,8 +25,8 @@ def build(base, sdk, ndk, output, sign_in_report, signing):
                           sign_in_hooks=hooks, four_column_sign_in=True)
     (output / "libSrc.so").write_bytes(engine)
     if signing:
-        manifest = manifest_version(manifest, 314, 313, prefix="A")
-        apk = output / "PvZ2-Unline-Aster-A314-ARM32-WSA-existing-data.apk"
+        manifest = manifest_version(manifest, 315, 313, prefix="A")
+        apk = output / "PvZ2-Unline-Aster-A315-ARM32-WSA-existing-data.apk"
         pack_apk(base, {ENGINE: engine, "AndroidManifest.xml": manifest}, sdk, apk, signing)
         print(apk)
 

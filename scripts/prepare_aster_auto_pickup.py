@@ -264,7 +264,7 @@ SECTIONS {{
                 b #0xf64e2c
             """)
             wrap(0xf64e78, 0xebd2c177, "b #0xf64f1c")
-            # Earlier dates might have been skipped. Only today uses the claim flag.
+            # Earlier slots are rendered from the saved prefix by the draw hook.
             wrap(0xf64c00, 0xe3a03000, "mov r3,#0\nb #0xf64d34")
         wrap_sign(0xf64c64, 0xebfffa04, f"""
             mov r2,r1
@@ -285,7 +285,7 @@ SECTIONS {{
             # The old sequential-login footer would show the date as a login count.
             wrap(0xf6236c, 0xeb081c55, "bx lr", True)
             wrap(0xf624bc, 0xebe8436b, "bx lr", True)
-            # Today's text conveys claim status without an animation over the amounts.
+            # The claimed artwork is drawn above the reward cards.
             wrap(0xf629e0, 0xebe66215, "bx lr", True)
             wrap(0xf629f4, 0xebe66210, "bx lr", True)
             wrap(0xf62cfc, 0xeb0819f1, "bx lr", True)
@@ -307,14 +307,61 @@ SECTIONS {{
         if current != icon_skip:
             assert current == struct.pack("<I", 0xe59480a4), hex(icon_site)
             hooks[icon_site] = (icon_end, icon_skip)
+        # Keep the native login increment away from the tagged save counter.
+        wrap(0x9efdb4, 0xe2833001, """
+            lsr ip,r3,#24
+            cmp ip,#0x53
+            beq #0x9efdc4
+            add r3,r3,#1
+            b #0x9efdb8
+        """)
+        wrap(0xa1d110, 0xe5d003a4, f"""
+            mov r1,r0
+            {get_base}
+            bl #{symbols['asterDailySignAvailable']}
+            b #0xa1d118
+        """)
+        for site, expected, dest in (
+            (0xf64bac, 0xe59983a0, "r8"), (0xf68f24, 0xe59053a0, "r5"),
+        ):
+            wrap(site, expected, f"""
+                push {{r0-r4,lr}}
+                bl #{symbols['asterDailySignCurrentSlot']}
+                mov {dest},r0
+                pop {{r0-r4,lr}}
+                b #{site + 4}
+            """)
+        wrap(0xf64e74, 0x158630b0, f"""
+            beq #0xf64e78
+            push {{r0-r4,lr}}
+            bl #{symbols['asterDailySignCurrentSlot']}
+            str r0,[r6,#0xb0]
+            pop {{r0-r4,lr}}
+            b #0xf64e78
+        """)
+        # The native success notification expects the ordinal just granted.
+        wrap(0xf68f6c, 0xe59453a0, """
+            ldr r5,[r4,#0x3a0]
+            ubfx r5,r5,#5,#5
+            b #0xf68f70
+        """)
+        wrap(0xf65328, 0xe51b0088, f"""
+            push {{r0-r4,lr}}
+            mov r1,r6
+            {get_base}
+            bl #{symbols['asterDailySignFooter']}
+            pop {{r0-r4,lr}}
+            ldr r0,[fp,#-0x88]
+            b #0xf6532c
+        """)
+        wrap(0xf61774, struct.unpack("<I", branch(0xf61774, 0xf61738))[0], f"""
+            cmp r1,#1
+            bne #0xf61738
+            mov r1,r0
+            {get_base}
+            b #{symbols['asterDailySignMakeupClick']}
+        """)
         if four_column_sign_in:
-            wrap(0xf62268, struct.unpack("<I", branch(0xf62268, 0x9734b0, True))[0], f"""
-                mov r3,r2
-                mov r2,r1
-                mov r1,r0
-                {get_base}
-                b #{symbols['asterDailySignPaper']}
-            """, True)
             # Allow for the native scroll widget's left inset when centering the grid.
             wrap(0xf64b14, 0xe0888108, """
                 lsl r8,r8,#2
@@ -330,6 +377,8 @@ SECTIONS {{
                 """, True)
             # The original computes index / 5 * 5 for the row break.
             wrap(0xf64c6c, 0xe0c23294, "bic r3,r4,#3\nb #0xf64c7c")
+            # Match the four-column grid when scrolling to the current row.
+            wrap(0xf65160, 0xe0ccec92, "lsr ip,r2,#2\nb #0xf6516c")
 
     old_rw = state["p_offset"]
     old_rw_end = old_rw + state["p_filesz"]

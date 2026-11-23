@@ -222,10 +222,22 @@ extern "C" void offlinePvpPanelReady(U b,P panel){
   businessReplacePanel=panel;businessReplaceUser=owner(b);
  }
 #endif
- if(panel&&regular(b)&&at<U>(panel,0xa4)==5){neighborPanel=panel;neighborPanelUser=owner(b);}
+ if(panel&&regular(b)&&at<U>(panel,0xa4)==5){
+#ifdef PVP_PRACTICE_HOUSE
+  if(practiceHousePanel(b,panel)){
+   // Native control 204 belongs to the ordinary neighbor replacement flow.
+   if(P replace=at<P>(panel,0xd4))call<void>(0,at<U>(at<P>(replace,0),0x8c),replace,0);
+   return;
+  }
+#endif
+  neighborPanel=panel;neighborPanelUser=owner(b);
+ }
 }
 static U neighborAction(U b,P panel,U button){
  if(button!=204||!panel||!regular(b)||at<U>(panel,0xa4)!=5)return 0;
+#ifdef PVP_PRACTICE_HOUSE
+ if(practiceHousePanel(b,panel))return 1;
+#endif
  if(panel!=neighborPanel||neighborPanelUser!=owner(b))return 1;
  const NpcPreset*n=nullptr;
  for(U i=0;i<NPC_COUNT;++i)if(!NPCS[i].evil&&NPCS[i].zone==at<U>(panel,0xac)&&NPCS[i].position==at<U>(panel,0xa8)){n=NPCS+i;break;}

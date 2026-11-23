@@ -4,7 +4,8 @@ from pathlib import Path
 import struct
 import sys
 
-from unicorn.arm_const import UC_ARM_REG_LR, UC_ARM_REG_PC, UC_ARM_REG_R0, UC_ARM_REG_R2, UC_ARM_REG_R4
+from unicorn.arm_const import (UC_ARM_REG_LR, UC_ARM_REG_PC, UC_ARM_REG_R0, UC_ARM_REG_R1,
+                               UC_ARM_REG_R2, UC_ARM_REG_R4)
 
 from check_offline_pvp_v76_focused import Definitions
 
@@ -12,6 +13,7 @@ from check_offline_pvp_v76_focused import Definitions
 def check(folder):
     sys.meta_path.insert(0, Definitions())
     import check_offline_pvp_arm as core
+    from check_offline_pvp_v60_arm import board, result, return_map
     from check_offline_pvp_v81_arm import GarrisonEngine
     from check_offline_pvp_v93_focused import crc, key
 
@@ -44,6 +46,19 @@ def check(folder):
             if offset == 0x1013a3c:
                 emu.reg_write(UC_ARM_REG_PC, emu.reg_read(UC_ARM_REG_LR))
                 return
+            if offset == 0x10449b8:
+                emu.reg_write(UC_ARM_REG_R0, 10)
+                emu.reg_write(UC_ARM_REG_PC, emu.reg_read(UC_ARM_REG_LR))
+                return
+            if offset == 0x4032e0 and self.get(manager + 0xf4) == 0x72000001:
+                losses = emu.reg_read(UC_ARM_REG_R2)
+                assert bytes(emu.mem_read(losses, 12)) == bytes(12)
+                active_board = self.get(manager + 0x7000 + 0x6bc)
+                assert emu.reg_read(UC_ARM_REG_R1) == int(self.get(active_board + 0x7f4) == 2)
+                self.windows += 1
+                self.put(manager + 0x7000 + 0x139c, manager + 0x12000)
+                emu.reg_write(UC_ARM_REG_PC, emu.reg_read(UC_ARM_REG_LR))
+                return
             return super().hook(emu, address, size, data)
 
         def region_panel(self, zone, price):
@@ -58,6 +73,11 @@ def check(folder):
             address = self.get(record + 16)
             return bytes(self.u.mem_read(address, 4 * self.get(address - 12))).decode("utf-32-le")
 
+        def practice_house(self):
+            rows = [p for p in self.residents() if self.get(p) == 0x72000001]
+            assert len(rows) == 1, rows
+            return rows[0]
+
     initial = Fixture()
     initial.enter()
     raw = bytearray(initial.files[key(initial)])
@@ -68,6 +88,7 @@ def check(folder):
     game.enter()
     game.run("offlineGarden")
     district_shops = "offlineBusinessUsesOwnName" in game.exports
+    practice = [p for p in game.residents() if game.get(p) == 0x72000001]
     assert not game.shops()
     if district_shops:
         game.put(map_control + 0xa8, manager + 0x19000)
@@ -81,6 +102,10 @@ def check(folder):
         assert len({game.get(p + 52) for p in game.shops()}) == 2
         assert {game.get(p + 48) for p in game.shops()} == {2}
         assert all(game.shop_name(p) == "空置的小屋" for p in game.shops())
+    if practice:
+        house = game.practice_house()
+        assert game.get(house + 28) == 2
+        assert game.get(house + 32) not in {game.get(p + 52) for p in game.shops()}
     area3 = game.region_panel(3, 16500)
     game.run("offlineBusinessAction", area3, 203)
     assert game.get(manager + 4) == 16500
@@ -132,6 +157,54 @@ def check(folder):
         migrated.run("offlineGarden")
         assert migrated.owned() == 3 and migrated.get(manager + 4) == 26500
         assert {0x71000001, 0x71000002} <= {migrated.get(p) for p in migrated.shops()}
+    if practice:
+        assert game.get(game.practice_house() + 28) == 3
+        assert restarted.get(restarted.practice_house() + 32) == game.get(game.practice_house() + 32)
+
+        sparring = Fixture()
+        sparring.enter()
+        sparring.run("offlineGarden")
+        sparring.own()
+        sparring.arrangement(2, 2, 3)
+        sparring.save()
+        sparring.request(3)
+        sparring.reset_map()
+        for _ in range(3):
+            sparring.train()
+        sparring.advance(91)
+        sparring.run("offlineTrainingTick", sparring.get(manager + 0x20))
+        assert sparring.held() == 3
+        sparring.selected(sparring.practice_house())
+        baseline = {name: bytes(content) for name, content in sparring.files.items()}
+        for stars in (0, 3):
+            sparring.stub(0x1042fe8, manager, 0, 4, 0)
+            board(sparring)
+            assert sparring.plants() == struct.pack("<III", 2, 2, 3)
+            sparring.run("offlineAttackPreviewCost", manager)
+            assert sparring.u.reg_read(UC_ARM_REG_R0) == 0
+            before = sparring.starts
+            for _ in range(2):
+                sparring.stub(0x1042fe8, manager, 0, 1, 0)
+            assert sparring.starts == before + 1
+            sparring.run(0x1030a50, manager + 0x14300, 1)
+            sparring.deaths(2)
+            sparring.put(sparring.get(manager + 0x7000 + 0x6bc) + 0x7f4, 1 if stars else 2)
+            before = sparring.windows
+            for _ in range(2):
+                result(sparring, stars, 0x72000001)
+            assert sparring.windows == before + 1 and sparring.held() == 3
+            assert all(sparring.get(manager + offset) == 0 for offset in (0xc4, 0xc8, 0xcc))
+            assert sparring.get(manager + 0x12000 + 0xbc) == stars
+            return_map(sparring)
+            sparring.reset_map()
+            assert {name: bytes(content) for name, content in sparring.files.items()} == baseline
+        sparring.stub(0x1042fe8, manager, 0, 1, 0)
+        board(sparring)
+        sparring.run(0x1030a50, manager + 0x14300, 1)
+        sparring.deaths(2)
+        sparring.cancel()
+        assert sparring.held() == 3
+        assert {name: bytes(content) for name, content in sparring.files.items()} == baseline
     shop = game.shops()[0]
     assert game.click(shop) == (3, game.get(shop + 48), game.get(shop + 52))
     game.scout_shop(0)
@@ -181,6 +254,8 @@ def check(folder):
     tutorial.enter()
     assert tutorial.get(manager + 4) == 1000 and bytes(tutorial.files[key(tutorial)]) == first
     print("P0 PvP shop projection, cancellation, failed write, profile isolation and tutorial rewards passed")
+    if practice:
+        print("Practice house relocation, copied layout, zero fee and unchanged saves after deaths passed")
 
 
 if __name__ == "__main__":

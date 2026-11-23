@@ -1,6 +1,9 @@
 // ARENA_PVP_OCCUPY_BTN formats CURRENCY_COST both when constructed and when
 // the live scout module updates its label. ARENA_PVP_BTN is a different button.
 static U attackPreviewFee(U b,U original){
+#ifdef PVP_PRACTICE_HOUSE
+ if(practiceArena(b))return 0;
+#endif
  const NpcPreset*n=npc(arenaNpc);
  if(arenaUser!=owner(b)||!regular(b))return original;
  if(n)return n->evil?DAVE_ATTACK_FEE:NEIGHBOR_ATTACK_FEE;

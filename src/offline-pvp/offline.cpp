@@ -5,6 +5,10 @@ template<class R,class...A>R call(U b,U o,A...a){return reinterpret_cast<R(*)(A.
 static constexpr U NEIGHBOR_ATTACK_FEE=10;
 static constexpr U DAVE_ATTACK_FEE=30;
 static constexpr U THREE_STAR_RAID_COINS=300;
+#ifdef PVP_PRACTICE_HOUSE
+static constexpr U PRACTICE_HOUSE=0x72000001u;
+static bool practiceHousePanel(U b,P panel);
+#endif
 // Starting balance for the native first-attack tutorial's completion.
 static constexpr U FIRST_ATTACK_COINS=1000;
 #ifdef BOARD_CAMERA_BOUNDS
@@ -625,7 +629,13 @@ static U arenaNpc,arenaUser;
 static bool resultAck,exitAck;
 static bool resultSaved;
 static P armyBankModule,armyBankBoard;
+#ifdef PVP_PRACTICE_HOUSE
+static bool practiceArena(U b){return arenaNpc==PRACTICE_HOUSE&&arenaUser==owner(b)&&regular(b);}
+#endif
 static bool localArenaIdentity(U b){
+#ifdef PVP_PRACTICE_HOUSE
+ if(arenaNpc==PRACTICE_HOUSE)return true;
+#endif
  if(npc(arenaNpc))return true;
 #ifdef PVP_BUSINESS_SCOUT
  return businessId(arenaNpc)
@@ -654,6 +664,9 @@ extern "C" void offlineBankReady(U b,P module){
  if(!regular(b)||arenaUser!=owner(b)||!localArenaIdentity(b)||!board||!at<P>(board,0xc4)||!same(reinterpret_cast<const char*>(at<P>(board,0xc4)),"arena_battle_test"))return;
  armyBankModule=module;armyBankBoard=at<P>(app,0x6bc);log(b,"battle-bank-ready");
 #ifdef PVP_BATTLE_ECONOMY
+#ifdef PVP_PRACTICE_HOUSE
+ if(practiceArena(b))return;
+#endif
  if(!at<unsigned char>(manager(b),0x100))markPaidBattleStarted(b);
 #endif
 }
@@ -806,7 +819,11 @@ extern "C" bool offlineScoutRewards(U b,P widget,P m){
 #else
  const BusinessPlot* shop=nullptr;
 #endif
- if((!n&&!shop)||requestedArenaView!=1||at<unsigned char>(m,0x100)!=1||arenaUser!=owner(b)||!regular(b))return false;
+ bool practice=false;
+#ifdef PVP_PRACTICE_HOUSE
+ practice=practiceArena(b);
+#endif
+ if((!n&&!shop&&!practice)||requestedArenaView!=1||at<unsigned char>(m,0x100)!=1||arenaUser!=owner(b)||!regular(b))return false;
  const bool dave=n&&n->evil;
  if(dave&&arenaDaveRound>=DAVE_ROUND_COUNT)return false;
  // The map details retain stock and production. Scouts show only the
@@ -814,13 +831,13 @@ extern "C" bool offlineScoutRewards(U b,P widget,P m){
  at<U>(widget,0x118)=1;
  at<unsigned char>(widget,0xee)=!shop;
  at<unsigned char>(widget,0xef)=n&&!dave;
- at<U>(widget,0xf0)=dave?DAVE_ROUNDS[arenaDaveRound].medals:shop?0:starCups(3);
+ at<U>(widget,0xf0)=dave?DAVE_ROUNDS[arenaDaveRound].medals:shop||practice?0:starCups(3);
  at<U>(widget,0xf4)=at<U>(widget,0xf8)=0;
- at<U>(widget,0xfc)=dave?0:shop?shop->rules.threeStarCoins:THREE_STAR_RAID_COINS;
+ at<U>(widget,0xfc)=dave||practice?0:shop?shop->rules.threeStarCoins:THREE_STAR_RAID_COINS;
  if(!dave){
   static constexpr char32_t title[]=U"3星可获得奖励";
   P heading=nullptr;char allocator=0;
-  call<void>(b,0x14eb451,&heading,title,&allocator);
+  call<void>(b,0x14eb451,&heading,practice?U"练习无奖励":title,&allocator);
   call<void>(b,0x14e9b0d,widget+0x110,&heading);
   release(b,heading,true);
  }
@@ -934,13 +951,22 @@ static bool attackBusiness(U b,const BusinessPlot&s){
  log(b,"business-battle-loaded",s.id);return true;
 }
 #endif
+#ifdef PVP_PRACTICE_HOUSE
+#include "practice_house.h"
+#endif
 static void projectGarden(U b,P m){
+#ifdef PVP_PRACTICE_HOUSE
+ removePracticeHouse(b,m);
+#endif
  neighbors(b,m);
 #ifdef PVP_BUSINESS_MAP
  projectBusinesses(b,m);
 #endif
 #ifdef PVP_REGIONS
  projectRegions(b,m);
+#endif
+#ifdef PVP_PRACTICE_HOUSE
+ projectPracticeHouse(b,m);
 #endif
 }
 extern "C" __attribute__((section(".text.entry"))) void offlineGarden(U b){
@@ -1014,6 +1040,9 @@ static __attribute__((noinline)) bool shopDefenseSession(U b,U id){
 }
 #endif
 extern "C" void offlineInfo(U b,P m,U a,U id,U kind){
+#ifdef PVP_PRACTICE_HOUSE
+ if(kind==2&&id==PRACTICE_HOUSE){practiceHouseRequest(b,m,id,3);return;}
+#endif
 #ifdef PVP_SILENT_RAIDS
  clearRevenge();
 #endif
@@ -1033,6 +1062,9 @@ extern "C" void offlineInfo(U b,P m,U a,U id,U kind){
  call<void>(b,0xf79d74);P net=call<P>(b,0xf7a070);call<void>(b,0xf87154,net,a,id,kind);
 }
 extern "C" void offlineAttack(U b,P m,U id,U reason,U unused){
+#ifdef PVP_PRACTICE_HOUSE
+ if(practiceHouseRequest(b,m,id,reason))return;
+#endif
 #ifdef PVP_BUSINESS_SCOUT
  if(regular(b)){
   const BusinessPlot*s=businessId(id);
@@ -1165,6 +1197,9 @@ extern "C" void offlineBattleRequest(U b,P m,U action){
 #endif
 #ifdef PVP_BATTLE_ECONOMY
    if(
+#ifdef PVP_PRACTICE_HOUSE
+      !practiceArena(b)&&
+#endif
 #ifdef PVP_BUSINESS_SCOUT
       (!businessId(arenaNpc)
 #ifdef PVP_BUSINESS_BATTLE
@@ -1286,6 +1321,16 @@ extern "C" U offlineBattleResult(U b,P m,U stars,U id,U kind){
  if(raidActive(b))return raidResult(b,stars);
 #endif
  if(!arenaModule(b))return 0;
+#ifdef PVP_PRACTICE_HOUSE
+ if(practiceArena(b)){
+  if(resultSaved||exitAck||requestedArenaView||stars>3||kind!=2||id!=PRACTICE_HOUSE)return 1;
+  const auto& state=economyRuntime.state;
+  at<U>(m,0xac)=state.coins;at<U>(m,0xb0)=state.medals;at<U>(m,0xb4)=state.cups;
+  for(U offset=0xb8;offset<=0xcc;offset+=4)at<U>(m,offset)=0;
+  resultSaved=resultAck=true;log(b,"practice-result-local",stars);
+  return 1;
+ }
+#endif
 #ifdef PVP_BUSINESS_SCOUT
  if(businessId(arenaNpc)
 #ifdef PVP_BUSINESS_BATTLE
@@ -1354,7 +1399,18 @@ static void completeLocalBattle(U b){
  if(resultAck){resultAck=false;P module=arenaModule(b);if(module){P m=manager(b);applyEconomy(b,m);
   P app=at<P>(at<P>(reinterpret_cast<P>(b),0x1821674),0);
   at<unsigned char>(m,0x17c)=0;call<void>(b,0x3fa970,app);
-  call<void>(b,0x108d340,module,1,0);log(b,"battle-result-window-opened");}}
+#ifdef PVP_PRACTICE_HOUSE
+  if(practiceArena(b)){
+   // Reuse the native result panel with an empty charged-loss list. Opening
+   // it directly also avoids the formal battle's profile progress callback.
+   P losses[3]{};
+   U outcome=call<U>(b,0x202010,at<P>(app,0x6bc));
+   call<void>(b,0x4032e0,app,U(outcome==2),losses,0);
+   if(P window=at<P>(app,0x139c))at<U>(window,0xbc)=at<U>(module,0x78);
+  }else
+#endif
+   call<void>(b,0x108d340,module,1,0);
+  log(b,"battle-result-window-opened");}}
  if(exitAck){exitAck=false;P m=manager(b);at<unsigned char>(m,0x17c)=0;finishArenaBoard(b);scene(b,25);log(b,"battle-exited");}
 }
 extern "C" U offlineResultContinue(U b,P window,U button){

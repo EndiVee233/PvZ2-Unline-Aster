@@ -38,8 +38,9 @@ def patch_native(native, sdk, headers, prior, p0, output):
     start = (rx["p_vaddr"] + rx["p_filesz"] + 15) & ~15
     alignment = rw["p_align"]
     runtime_address = (rw["p_vaddr"] + rw["p_memsz"] + alignment - 1) & -alignment
+    flags = ("-DPVP_DISTRICT_SHOPS", "-DPVP_PRACTICE_HOUSE")
     patched_elf = compile_payload(sdk, ROOT / "src", headers, output, start, runtime_address,
-                                  archived=False, extra_flags=("-DPVP_DISTRICT_SHOPS",))
+                                  archived=False, extra_flags=flags)
     guest = ELFFile(BytesIO(patched_elf.read_bytes()))
     before = ELFFile(BytesIO(prior.read_bytes()))
     p0_elf = ELFFile(BytesIO(p0.read_bytes()))

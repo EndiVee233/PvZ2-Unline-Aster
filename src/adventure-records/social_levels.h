@@ -453,12 +453,18 @@ extern "C" bool asterAdventureAllStarsTitle(Word base, Object page) {
 }
 
 extern "C" int asterAdventureOtherStarArt(Word base, Object widget, Word slot) {
+    if (slot >= 3) return -1;
     const Word index = field<Word>(widget, 0xa4);
-    // Keep the selected star's stock outline and reward animation.
-    if (slot == index || slot >= 3) return -1;
-    const int mask = challengeDialogStars(base, field<Word>(widget, 0xa0), index,
-                                        field<Word>(widget, 0xa8));
-    return mask < 0 ? -1 : int((Word(mask) >> slot) & 1);
+    const Word mode = field<Word>(widget, 0xa8);
+    const int mask = challengeDialogStars(base, field<Word>(widget, 0xa0), index, mode);
+    if (mask < 0) return -1;
+    const Word bit = 1U << slot;
+    if (mode == 3 && activeMultiStar(gameBoard(base))) {
+        if (Word(mask) & bit) return 1;
+        return (multiStar.mask & bit) ? 2 : 0;
+    }
+    // Single-star intros and result pages keep the primary star's native animation.
+    return slot == index ? -1 : int((Word(mask) & bit) != 0);
 }
 
 // The native phase-1 update has finished loading the level resources and is

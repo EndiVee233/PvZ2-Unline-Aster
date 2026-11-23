@@ -10,7 +10,7 @@ from zipfile import ZipFile
 from elftools.elf.elffile import ELFFile
 from keystone import KS_ARCH_ARM, KS_MODE_ARM, Ks
 
-from build_aster_adventure_records import payload, social_dex
+from build_aster_adventure_records import STAR_RIBBON_ART, payload, social_dex, star_ribbon_instructions
 from build_aster_friend_roster import installed_entries
 from build_aster_pvp_feedback import pack_apk
 from build_aster_save_path_fix import manifest_version
@@ -62,6 +62,9 @@ def patch_guest(engine, ndk, output, prior):
 
     def helper(name, args):
         return f"{args}\nadr r0,anchor\nldr ip,[r0]\nsub r0,r0,ip\nbl #{entries[name]}"
+
+    hook(STAR_RIBBON_ART, branch(STAR_RIBBON_ART, 0x1A965BC),
+         star_ribbon_instructions(helper("asterAdventureOtherStarArt", "mov r1,r6")))
 
     hook(0x902280, struct.pack("<I", 0xE1550006), f"""
         push {{r0-r3,ip,lr}}

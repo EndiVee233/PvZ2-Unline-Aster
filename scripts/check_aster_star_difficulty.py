@@ -6,7 +6,13 @@ from pathlib import Path
 import struct
 from zipfile import ZipFile
 
-from unicorn.arm_const import UC_ARM_REG_LR, UC_ARM_REG_PC, UC_ARM_REG_R0, UC_ARM_REG_R9, UC_ARM_REG_SP
+from unicorn import UC_HOOK_CODE
+from unicorn.arm_const import (
+    UC_ARM_REG_LR, UC_ARM_REG_PC, UC_ARM_REG_R0, UC_ARM_REG_R5, UC_ARM_REG_R6,
+    UC_ARM_REG_R8, UC_ARM_REG_R9, UC_ARM_REG_SP,
+)
+
+from build_aster_adventure_records import STAR_RIBBON_ART, STAR_RIBBON_EMPTY, STAR_RIBBON_GOLD, STAR_RIBBON_OUTLINE
 
 from check_aster_adventure_records import (
     ARGS, BASE, BOARD, DATA, DIALOG, GRAPHICS, PROFILE, PROPERTIES, SCENE, SocialGame,
@@ -87,6 +93,24 @@ class ChallengeGame(SocialGame):
         return self.get(BOARD + 0x7f0)[0] + 1
 
 
+    def ribbon(self, slot, mode=3):
+        index = self.get(BOARD + 0x7f0)[0]
+        self.put(DIALOG + 0xa0, 3, index, mode)
+        self.arm.reg_write(UC_ARM_REG_R6, DIALOG)
+        self.arm.reg_write(UC_ARM_REG_R8, slot)
+        targets = (STAR_RIBBON_EMPTY, STAR_RIBBON_GOLD, STAR_RIBBON_OUTLINE, STAR_RIBBON_ART + 4)
+        hooks = [self.arm.hook_add(UC_HOOK_CODE, self.stop, begin=BASE + target, end=BASE + target)
+                 for target in targets]
+        try:
+            self.execute(STAR_RIBBON_ART)
+            target = self.arm.reg_read(UC_ARM_REG_PC) - BASE
+            if target == STAR_RIBBON_OUTLINE:
+                assert self.arm.reg_read(UC_ARM_REG_R5) == slot
+            return target
+        finally:
+            for hook in hooks:
+                self.arm.hook_del(hook)
+
     def draw_reward(self, expected):
         assert self.execute(0x998ec0, BOARD, 0, return_from_call=True) == REWARD
         self.put(IMAGE + 0x28, 96, 93)
@@ -140,6 +164,9 @@ def check(output, engine):
     hard = ChallengeGame(output, engine, 2)
     assert hard.select(1, 3) == 3
     assert not hard.execute("asterAdventureLoadMultiStar", BASE, MODULE, PROPERTIES)
+    assert [hard.ribbon(i) for i in range(3)] == [
+        STAR_RIBBON_EMPTY, STAR_RIBBON_EMPTY, STAR_RIBBON_ART + 4,
+    ]
 
     for difficulty, missed, existing, awards in (
         (0, 0, 0, (1, 3)), (1, 0, 0, (1, 3)),
@@ -157,6 +184,10 @@ def check(output, engine):
         assert game.select(1, 3) == 3
         assert game.execute("asterAdventureLoadMultiStar", BASE, MODULE, PROPERTIES)
         assert game.goals == [1, 4, 3]
+        assert [game.ribbon(i) for i in range(3)] == [
+            STAR_RIBBON_GOLD if existing else STAR_RIBBON_OUTLINE,
+            STAR_RIBBON_EMPTY, STAR_RIBBON_OUTLINE,
+        ]
         assert game.execute("asterAdventureMultiStarDescription", BASE, BOARD, 0) == 1
         assert game.execute("asterAdventureMultiStarDescription", BASE, BOARD, 1) == 0
         assert game.execute("asterAdventureMultiStarDescription", BASE, BOARD, 2) == 1
@@ -188,11 +219,15 @@ def check(output, engine):
     assert triple.select(1, 2, 3) == 3
     assert triple.execute("asterAdventureLoadMultiStar", BASE, MODULE, PROPERTIES)
     assert triple.goals == [1, 4, 2, 3]
+    assert [triple.ribbon(i) for i in range(3)] == [STAR_RIBBON_OUTLINE] * 3
     triple.start(10, stars=3)
     triple.tick(10.25)
     triple.finish()
     triple.execute(0x903634, MODULE, return_from_call=True, instruction_limit=350_000)
     assert triple.awards == [1, 2, 3]
+    assert [triple.ribbon(i, mode=1) for i in range(3)] == [
+        STAR_RIBBON_ART + 4, STAR_RIBBON_GOLD, STAR_RIBBON_GOLD,
+    ]
     triple.draw_reward(3)
     triple.put(SPRITE + 0xb0, GOALS, GOALS + 6 * 4)
     assert triple.execute("asterAdventureGoalListY", BASE, SPRITE, 200) == 218
@@ -200,7 +235,7 @@ def check(output, engine):
     assert triple.execute("asterAdventureGoalListY", BASE, SPRITE, 200) == 200
     assert triple.best(stars=1)[4:] == triple.best(stars=2)[4:] == triple.best(stars=3)[4:]
 
-    print("Difficulty and multi-star ARM checks passed (unlock, opt-out, shared rule, partial win, record parity, replay, reward-art layering).")
+    print("Difficulty and multi-star ARM checks passed (unlock, opt-out, shared rule, partial win, record parity, replay, ribbon outlines and reward-art layering).")
 
 
 if __name__ == "__main__":

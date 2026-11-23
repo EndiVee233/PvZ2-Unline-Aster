@@ -38,6 +38,7 @@ STAR_MODULE_GATE, STAR_MODULE_LOCKED, STAR_MODULE_ENABLED = 0x90221C, 0x902348, 
 STAR_DESCRIPTIONS_GATE, STAR_DESCRIPTIONS_ENABLED = 0x7B1EB8, 0x7B1EC8
 STAR_RESULT_TITLE = 0x7E5568
 STAR_RIBBON_ART, STAR_RIBBON_EMPTY, STAR_RIBBON_GOLD = 0x805DB0, 0x805FB0, 0x805FF8
+STAR_RIBBON_OUTLINE = 0x806198
 STAR_NEXT_BUTTON, STAR_NEXT_CLICK = 0x7E5CFC, 0x7E6BC8
 STAR_SHOW_NEXT, STAR_SHOW_CONTINUE, STAR_CLICK_CONTINUE = 0x7E5D30, 0x7E62CC, 0x7E6B68
 LEVEL_MENU_DRAW, POP_GRAPHICS = 0x7F3934, 0x116D764
@@ -77,6 +78,26 @@ FLAGS = [
     "-fno-stack-protector", "-fno-exceptions", "-fno-rtti",
     "-fno-unwind-tables", "-fno-asynchronous-unwind-tables",
 ]
+
+def star_ribbon_instructions(call):
+    return f"""
+        push {{r0-r3,ip,lr}}
+        mov r2,r8
+        {call}
+        cmp r0,#2
+        beq selected_outline
+        cmp r0,#0
+        pop {{r0-r3,ip,lr}}
+        beq #{STAR_RIBBON_EMPTY}
+        bgt #{STAR_RIBBON_GOLD}
+        ldr r3,[r6,#0xa4]
+        b #{STAR_RIBBON_ART + 4}
+    selected_outline:
+        pop {{r0-r3,ip,lr}}
+        mov r5,r8
+        b #{STAR_RIBBON_OUTLINE}
+    """
+
 
 def star_advance_patches(stub, helper):
     button = stub(f"""push {{r0-r3,ip,lr}}
@@ -507,16 +528,7 @@ def patch_native(native, ndk, output, battle_tools=False, social_levels=False, s
             pop {{r0-r3,ip,lr}}
             b #{STAR_RESULT_TITLE + 4}
         """)
-        star_ribbon = stub(f"""push {{r0-r3,ip,lr}}
-            mov r2,r8
-            {helper("asterAdventureOtherStarArt", "r6")}
-            cmp r0,#0
-            pop {{r0-r3,ip,lr}}
-            beq #{STAR_RIBBON_EMPTY}
-            bgt #{STAR_RIBBON_GOLD}
-            ldr r3,[r6,#0xa4]
-            b #{STAR_RIBBON_ART + 4}
-        """)
+        star_ribbon = stub(star_ribbon_instructions(helper("asterAdventureOtherStarArt", "r6")))
         menu_draw = stub(f"""push {{r0-r3,ip,lr}}
             mov r2,r7
             {helper("asterAdventureDrawMenu", "r6")}

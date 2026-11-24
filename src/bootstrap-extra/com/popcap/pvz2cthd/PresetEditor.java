@@ -124,6 +124,13 @@ public final class PresetEditor {
             send(7);
             GithubPresetCatalog.refresh(a,event==31);
             break;
+        case 33:
+            new AlertDialog.Builder(a)
+                .setTitle("阳光超出上限")
+                .setMessage("请铲除部分植物后再保存阵容。")
+                .setPositiveButton("确定", null)
+                .show();
+            break;
         }
     }catch(Exception x){android.util.Log.e("PvpPresetEditor","UI event",x);message("操作失败："+x.getMessage());}}
     private static EditText field(Activity a,LinearLayout layout,String hint,String initial,int inputType){

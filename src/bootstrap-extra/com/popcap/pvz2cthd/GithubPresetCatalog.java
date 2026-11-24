@@ -15,6 +15,7 @@ import org.json.*;
 final class GithubPresetCatalog {
     private static final String REPOSITORY = "EndiVee233/PvZ2-Unline-Aster";
     private static final String DIRECTORY = "pvp-presets";
+    private static final String RULES_FILE = "catalog.json";
     private static final String SPECIAL_DIRECTORY = DIRECTORY + "/special-enemies";
     private static final String FBI_FILE = "fbi" + PvpLevelStorage.SUFFIX;
     private static final int SPECIAL_DIRECTORY_MARKER = 1 << 16;
@@ -43,24 +44,62 @@ final class GithubPresetCatalog {
             PvpPresetDocument.Catalogue plants = new PvpPresetDocument.Catalogue(new String(
                 PvpPresetDocument.read(activity.getAssets().open("pvp-presets/catalogue.json")), StandardCharsets.UTF_8));
             PvpLevelStorage storage = new PvpLevelStorage(activity);
-            File cache = enabled ? storage.github() : null;
+            File rules = new File(storage.github(), RULES_FILE);
+            int sunLimit = cachedSunLimit(rules);
+            File cache = enabled ? rules.getParentFile() : null;
             File specialCache = cache == null ? null : storage.githubSpecial();
             if (cache != null) migrateCache(activity, cache);
-            publish(request, readPool(storage, cache, specialCache, plants));
+            publish(request, readPool(storage, cache, specialCache, plants), sunLimit);
             if (download && request == generation) {
+                sunLimit = syncSunLimit(rules, sunLimit, request);
                 trySync(cache, DIRECTORY, request);
                 trySync(specialCache, SPECIAL_DIRECTORY, request);
-                publish(request, readPool(storage, cache, specialCache, plants));
+                publish(request, readPool(storage, cache, specialCache, plants), sunLimit);
             }
         } catch (Exception e) {
             Log.i("PvpPresetEditor", "PVP level load failed (" + e.getClass().getSimpleName() + ")", e);
         }
     }
 
-    private static void publish(int request, int[] pool) {
+    private static void publish(int request, int[] pool, int sunLimit) {
+        int[] payload = Arrays.copyOf(pool, pool.length + 1);
+        payload[pool.length] = sunLimit;
         PresetEditor.UI.post(() -> {
-            if (request == generation) PresetEditor.send(8, pool);
+            if (request == generation) PresetEditor.send(8, payload);
         });
+    }
+
+    static int parseSunLimit(byte[] data) throws Exception {
+        PvpPresetDocument.checkDepth(data);
+        JSONTokener input = new JSONTokener(new String(data, StandardCharsets.UTF_8));
+        Object value = input.nextValue();
+        if (!(value instanceof JSONObject) || input.nextClean() != 0)
+            throw new IOException("Invalid PvP rules document");
+        JSONObject rules = (JSONObject) value;
+        PvpPresetDocument.integer(rules, "version", 1, 1);
+        return PvpPresetDocument.integer(rules, "sunLimit", 1, 20000);
+    }
+
+    private static int cachedSunLimit(File file) {
+        try { return parseSunLimit(read(new AtomicFile(file).openRead(), 4096)); }
+        catch (Exception ignored) { return 0; } // Use the native default.
+    }
+
+    private static int syncSunLimit(File file, int fallback, int request) {
+        if (request != generation) return fallback;
+        try {
+            byte[] data = rawEndpoint().fetch("/" + REPOSITORY + "/main/" + DIRECTORY + "/" + RULES_FILE, 4096);
+            int sunLimit = parseSunLimit(data);
+            if (request == generation) PvpLevelStorage.write(file, data);
+            return sunLimit;
+        } catch (Exception e) {
+            Log.i("PvpPresetEditor", "Retained cached PvP sun limit", e);
+            return fallback;
+        }
+    }
+
+    private static Endpoint rawEndpoint() {
+        return new Endpoint("raw.githubusercontent.com", "185.199.108.133", "185.199.109.133");
     }
 
     private static final class RemoteFile {
@@ -85,7 +124,7 @@ final class GithubPresetCatalog {
             JSONObject entry = entries.getJSONObject(i);
             String name = entry.optString("name"), sha = entry.optString("sha");
             int size = entry.optInt("size", -1);
-            if (!"file".equals(entry.optString("type")) || !name.endsWith(".json") || name.equals("catalog.json") ||
+            if (!"file".equals(entry.optString("type")) || !name.endsWith(".json") || name.equals(RULES_FILE) ||
                 name.indexOf('/') >= 0 || name.indexOf('\\') >= 0 || !sha.matches("[a-f0-9]{40}") ||
                 size <= 0 || size > PvpPresetDocument.MAX_BYTES) continue;
             result.add(new RemoteFile(name, sha, size));
@@ -124,7 +163,7 @@ final class GithubPresetCatalog {
         byte[] directory = api.fetch("/repos/" + REPOSITORY + "/contents/" + remoteDirectory + "?ref=main", MAX_INDEX_BYTES);
         List<RemoteFile> files = listing(directory);
         if (request != generation) return;
-        Endpoint raw = new Endpoint("raw.githubusercontent.com", "185.199.108.133", "185.199.109.133");
+        Endpoint raw = rawEndpoint();
         ExecutorService downloads = Executors.newFixedThreadPool(4);
         HashSet<String> scheduled = new HashSet<>();
         try {

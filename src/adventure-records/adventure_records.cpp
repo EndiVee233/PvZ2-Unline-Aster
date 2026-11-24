@@ -94,6 +94,15 @@ static bool playing(Object board) {
         && !field<unsigned char>(board, 0x8d5) && !field<unsigned char>(board, 0x7fd);
 }
 
+static bool pastLastStandSetup(Word base, Object board) {
+    const auto modules = field<Object>(board, 0x938);
+    const auto lastStand = modules
+        ? native<Object>(base, 0x43af38, modules, native<Object>(base, 0x3f8538)) : nullptr;
+    // Last Stand already uses Board phase 5 for editing the lawn.
+    // Its own state 7 enables plant actions and zombie waves after Start Battle.
+    return !lastStand || field<Word>(lastStand, 0x34) == 7;
+}
+
 static Object observedBattleBoard;
 static float observedBattleStart;
 static constexpr Word plantActionsEnabled = 0x7fb;
@@ -224,7 +233,7 @@ extern "C" void asterAdventureTick(Word base, Object board) {
     const auto clock = gameClock(base);
     if (!clock) return;
     const float time = field<float>(clock, 0x24);
-    const bool live = playing(board);
+    const bool live = playing(board) && pastLastStandSetup(base, board);
     current.clock.advance(time, field<float>(clock, 0x28), live);
 #ifdef ASTER_SOCIAL_LEVELS
     if (live && current.borrowedCard.level && !current.borrowedDrop.id && !current.borrowedDrop.serial &&

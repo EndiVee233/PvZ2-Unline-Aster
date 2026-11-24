@@ -21,7 +21,8 @@ static ArenaClockHud arenaClock;
 static bool showAdventureClock(Word base, Object board) {
     return sameRun(base, board) && field<Word>(board, 0xc0) == 5 &&
         !field<Word>(board, 0x7f4) &&
-        AdventureRecords::formationSupported(field<const char*>(board, 0xc4));
+        AdventureRecords::formationSupported(field<const char*>(board, 0xc4)) &&
+        pastLastStandSetup(base, board);
 }
 
 static void freeClockLabel(Word base) {

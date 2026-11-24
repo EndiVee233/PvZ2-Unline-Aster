@@ -835,11 +835,20 @@ static MenuRect userMapWidgetBounds(Object widget) {
     return bounds;
 }
 
-static MenuRect userMapSkinBounds(Object sprite, MenuRect box, bool alignLeft, int inset) {
-    if (!sprite || box.width <= 2 * inset || box.height <= 2 * inset) return {};
-    const auto placement = fitBorrowImage(sprite, {box.x + inset, box.y + inset,
-                                                    box.width - 2 * inset, box.height - 2 * inset});
-    return {alignLeft ? box.x + inset : int(placement.x), int(placement.y),
+static MenuRect userMapButtonFrame(MenuRect box, bool friends) {
+    // The friend artwork extends above its button frame. Give it more room
+    // and align the visible frames with the sign-in button.
+    const int userOffset = box.height / 64;
+    const int inset = friends ? box.height / 16 : box.height / 10 + userOffset;
+    const int verticalOffset = friends ? -(inset * 3 / 4) : userOffset;
+    return {box.x + inset, box.y + inset + verticalOffset,
+            box.width - 2 * inset, box.height - 2 * inset};
+}
+
+static MenuRect userMapSkinBounds(Object sprite, MenuRect frame, bool alignLeft) {
+    if (!sprite || frame.width <= 0 || frame.height <= 0) return {};
+    const auto placement = fitBorrowImage(sprite, frame);
+    return {alignLeft ? frame.x : int(placement.x), int(placement.y),
             int(field<int>(sprite, 0x28) * placement.scale + 0.5f),
             int(field<int>(sprite, 0x2c) * placement.scale + 0.5f)};
 }
@@ -857,9 +866,9 @@ extern "C" bool asterUserHit(Word base, Object widget, int x, int y) {
     if (!widget || (widget != user.widget && widget != user.friendWidget) || !userMapVisible(base) ||
         !native<bool>(base, 0x97680c, widget, x, y)) return false;
     const bool friends = widget == user.friendWidget;
-    const auto box = userMapWidgetBounds(widget);
-    const auto skin = userMapSkinBounds(friends ? friendMapImage(base, false) : user.mapSkin.image, box,
-                                        friends || userHasCnArt(), box.height / 10);
+    const auto frame = userMapButtonFrame(userMapWidgetBounds(widget), friends);
+    const auto skin = userMapSkinBounds(friends ? friendMapImage(base, false) : user.mapSkin.image, frame,
+                                        friends || userHasCnArt());
     return x >= skin.x && x < skin.x + skin.width && y >= skin.y && y < skin.y + skin.height;
 }
 
@@ -912,23 +921,23 @@ extern "C" void asterUserDraw(Word base, Object widget, Object graphics) {
         !native<bool>(base, 0x976720, widget)) return;
     const auto box = userMapWidgetBounds(widget);
     if (box.width < 10 || box.height < 10) return;
-    if (widget == user.friendWidget) {
+    const bool friends = widget == user.friendWidget;
+    const auto frame = userMapButtonFrame(box, friends);
+    if (friends) {
         const auto sprite = friendMapImage(base, user.friendPressed);
         if (!sprite) return;
         const auto tint = field<unsigned char>(graphics, 0x64);
         native<void>(base, 0x1166e74, graphics, false);
-        const auto button = userMapSkinBounds(sprite, box, true, box.height / 10);
+        const auto button = userMapSkinBounds(sprite, frame, true);
         userSkinImage(base, graphics, sprite, button);
         field<unsigned char>(graphics, 0x64) = tint;
         return;
     }
     if (!user.mapSkin.image) return;
 
-    const int inset = box.height / 10 + (user.pressed ? box.height / 40 : 0);
     const auto image = user.pressed && user.mapPressed.image ? user.mapPressed.image : user.mapSkin.image;
-    auto fitted = fitBorrowImage(image, {box.x + inset, box.y + inset,
-                                         box.width - 2 * inset, box.height - 2 * inset});
-    if (userHasCnArt()) fitted.x = float(box.x + inset);
+    auto fitted = fitBorrowImage(image, frame);
+    if (userHasCnArt()) fitted.x = float(frame.x);
     const auto tint = field<unsigned char>(graphics, 0x64);
     const float matrix[] = {fitted.scale, 0, fitted.x, 0, fitted.scale, fitted.y, 0, 0, 1};
     native<void>(base, 0x1166e74, graphics, false);

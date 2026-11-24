@@ -12,6 +12,7 @@ from merge_legacy_pvp_resources import Bundle, trie_write, u32
 
 GROUP = "UI_AsterSocial"
 ATLAS = GROUP + "_1536_00"
+USER_BUTTON_PRESSED = Path(__file__).resolve().parents[1] / "src/adventure-records/art/user-button-down.png"
 # UI_Avatars_1536, PvZ2 International Android 13.6.1 (1067).
 # The filenames retain the suffix of IMAGE_UI_JOUST_AVATARS_AVATAR_*.
 ARENA_AVATARS = (18, 22, 24, 6, 9, 16)
@@ -118,6 +119,10 @@ def add_social_art(original, archive, cn_user_apk=None):
         from prepare_aster_cn_user_art import append_cn_user_credit, extract_cn_user_art
 
         sprites.update(extract_cn_user_art(cn_user_apk))
+        with Image.open(USER_BUTTON_PRESSED) as pressed:
+            if pressed.mode != "RGBA" or pressed.size != sprites["USER_BUTTON_DOWN"].size:
+                raise ValueError("The User button states must have matching atlas dimensions")
+            sprites["USER_BUTTON_DOWN"] = pressed.copy()
         append_cn_user_credit(bundle)
     else:
         with Image.open(Path(__file__).resolve().parents[1] / "src/adventure-records/art/user-button.png") as icon:
@@ -176,7 +181,7 @@ def add_social_art(original, archive, cn_user_apk=None):
     return built
 
 
-def edit_social_atlas(original, additions, recolor=None):
+def edit_social_atlas(original, additions, recolor=None, *, replacements=None):
     """Add sprites below the existing cells, optionally updating existing artwork in place."""
     from prepare_offline_pvp_seagull_hd import texture_section
 
@@ -196,6 +201,14 @@ def edit_social_atlas(original, additions, recolor=None):
         raise ValueError("Expected the existing uncompressed RGBA social atlas")
     canvas = Image.frombytes("RGBA", (width, height), pixels)
     existing = [entry for entry in group["resources"] if entry.get("parent") == atlas["id"]]
+    if replacements:
+        by_name = {entry["id"].removeprefix("IMAGE_ASTER_SOCIAL_"): entry for entry in existing}
+        for name, image in replacements.items():
+            entry = by_name[name]
+            x, y, w, h = (entry[field] for field in ("ax", "ay", "aw", "ah"))
+            if image.mode != "RGBA" or image.size != (w, h):
+                raise ValueError(f"Replacement must match the existing social sprite: {name}")
+            canvas.paste(image, (x, y))
     if recolor:
         for entry in existing:
             key = entry["id"].removeprefix("IMAGE_ASTER_SOCIAL_")
@@ -218,7 +231,8 @@ def edit_social_atlas(original, additions, recolor=None):
         manifest["slot_count"] += 1
     offset = u32(block, 40)
     bundle.payloads[index] = block[:offset] + canvas.tobytes() + block[offset + len(pixels):]
-    bundle.replace_manifest(manifest_index, manifest_path, manifest)
+    if additions:
+        bundle.replace_manifest(manifest_index, manifest_path, manifest)
     return bundle.build()
 
 

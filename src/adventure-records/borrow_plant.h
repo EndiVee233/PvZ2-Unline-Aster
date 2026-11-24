@@ -819,10 +819,18 @@ static void dropBorrowedCard(Word base, Object board) {
     const char* alias = nullptr;
     const Word columns = field<Word>(board, 0xb4);
     const Word rows = field<Word>(board, 0xb8);
-    if (!columns || !rows || !borrowPlantType(base, current.borrowedCard.type)) {
+    const auto plant = borrowPlantType(base, current.borrowedCard.type);
+    if (!columns || !rows || !plant) {
         current.borrowedCard.level = 0;
         return;
     }
+    // Native placement loads this framework lazily. A seed-rain cursor
+    // creates its animation earlier, so register the group with this board now.
+    const auto framework = plant + 8;
+    const auto app = gameApp(base);
+    if (app && native<bool>(base, 0x4058e4, app, framework))
+        native<void>(base, 0x20e468, board, framework);
+
     native<void>(base, 0x14ed0e1, &kind, "seed_rain", &allocator);
     int lawn[4];
     native<void>(base, 0x240dbc, lawn, 0U, 0U, columns, rows);

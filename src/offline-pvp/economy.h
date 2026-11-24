@@ -657,6 +657,15 @@ static bool trainingFinishPrompt;
 static U trainingMinutes(U b){
  return (trainingSeconds(economyRuntime.state,realNow(b))+59)/60;
 }
+static void setInstantGemLabel(U b,P button,U price){
+ U text[5]{},n=0;
+ if(price>=10)text[n++]=U('0'+price/10);
+ text[n++]=U('0'+price%10);
+ text[n++]=0x94bb;text[n++]=0x77f3;
+ P wide=nullptr;char allocator=0;
+ call<void>(b,0x14eb451,&wide,text,&allocator);
+ call<void>(b,0x14eae75,button+0xa4,&wide);release(b,wide,true);
+}
 extern "C" void offlineTrainingDisplay(U b,P ui){
  if(!regular(b)||!ensureEconomy(b,manager(b)))return;
  P button=at<P>(ui,0x108),timer=at<P>(ui,0x10c);if(!button||!timer)return;
@@ -673,10 +682,7 @@ extern "C" void offlineTrainingDisplay(U b,P ui){
  // The original gem button also draws an icon/price decoration at a fixed
  // position. Clear it through its native destructor before using one label.
  call<void>(b,0x7e96a4,button);
- U text[32]{},n=0;if(price>=10)text[n++]=U('0'+price/10);text[n++]=U('0'+price%10);
- text[n++]=0x94bb;text[n++]=0x77f3;text[n++]=0x7acb;text[n++]=0x5373;text[n++]=0x5b8c;text[n++]=0x6210;
- P wide=nullptr;char allocator=0;call<void>(b,0x14eb451,&wide,text,&allocator);
- call<void>(b,0x14eae75,button+0xa4,&wide);release(b,wide,true);
+ setInstantGemLabel(b,button,price);
 }
 extern "C" U offlineTrainingClick(U b,P ui,U button){
  if(!regular(b)||button!=1)return 0;

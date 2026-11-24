@@ -164,10 +164,7 @@ extern "C" void offlineUpgradeDisplay(U b,P ui){
  call<void>(0,at<U>(at<P>(button,0),0x8c),button,1);
  call<void>(0,at<U>(at<P>(button,0),0xa4),button,0);
  call<void>(b,0x7e96a4,button);
- U text[32]{},n=0;if(price>=10)text[n++]=U('0'+price/10);text[n++]=U('0'+price%10);
- text[n++]=0x94bb;text[n++]=0x77f3;text[n++]=0x7acb;text[n++]=0x5373;text[n++]=0x5b8c;text[n++]=0x6210;
- P wide=nullptr;char allocator=0;call<void>(b,0x14eb451,&wide,text,&allocator);
- call<void>(b,0x14eae75,button+0xa4,&wide);release(b,wide,true);
+ setInstantGemLabel(b,button,price);
 }
 #ifdef PVP_UPGRADE_VISUAL_FIX
 extern "C" void offlineUpgradePanelDraw(U b,P ui,P graphics){

@@ -86,7 +86,7 @@ extern "C" void offlineResearchTick(U b,P ui){
  researchView={ui,button,index,level,mode,now};if(!button||level>=4)return;
  bool disabled=mode==2||(mode==0&&(s.coins<RESEARCH_SPECS[index].cost[level-1]||s.baseLevel<RESEARCH_SPECS[index].base[level-1]));
  call<void>(0,at<U>(at<P>(button,0),0xa4),button,U(disabled));
- if(mode==1&&refresh){call<void>(b,0x7e96a4,button);U minutes=researchMinutes(b);evolutionLabel(b,button,minutes,evolutionPrice(b,minutes));}
+ if(mode==1&&refresh){call<void>(b,0x7e96a4,button);setInstantGemLabel(b,button,evolutionPrice(b,researchMinutes(b)));}
 }
 extern "C" U offlineResearchClick(U b,P ui,U button){
  if(!regular(b)||(button!=U(-2)&&button!=U(-3)))return 0;

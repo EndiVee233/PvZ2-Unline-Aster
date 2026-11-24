@@ -39,13 +39,6 @@ static void settleEvolution(U b,P m){
 }
 static U evolutionMinutes(U b){const Economy&s=economyRuntime.state;U now=realNow(b);return s.evolutionIndex&&s.evolutionDue>now?(s.evolutionDue-now+59)/60:0;}
 static U evolutionPrice(U b,U minutes){return call<U>(b,0x1086e0c,reinterpret_cast<P>(evolutionTimer),minutes);}
-static U decimal(U*out,U n,U value){U reverse[10],count=0;do{reverse[count++]=U('0')+value%10;value/=10;}while(value);while(count)out[n++]=reverse[--count];return n;}
-static void evolutionLabel(U b,P button,U minutes,U price){
- U text[64]{},n=decimal(text,0,price);
- const U tail[]={0x94bb,0x77f3,0x5b8c,0x6210,0x28,0};
- for(U i=0;tail[i];++i)text[n++]=tail[i];n=decimal(text,n,minutes);text[n++]=0x5206;text[n++]=0x29;
- P wide=nullptr;char allocator=0;call<void>(b,0x14eb451,&wide,text,&allocator);call<void>(b,0x14eae75,button+0xa4,&wide);release(b,wide,true);
-}
 // The cash overlay is intentionally not constructed for this local queue.
 // Keep the regular native button and original layout/next-level descriptions.
 extern "C" void offlineEvolutionBuild(U b,P ui){
@@ -67,7 +60,7 @@ extern "C" void offlineEvolutionTick(U b,P ui){
  U now=realNow(b);bool refresh=evolutionView.ui!=ui||evolutionView.second!=now;
  evolutionView.ui=ui;evolutionView.second=now;
  call<void>(0,at<U>(at<P>(button,0),0xa4),button,mode==2||(mode==0&&s.coins<EVOLUTION_SPECS[index].cost[level-1]));
- if(mode==1&&refresh){call<void>(b,0x7e96a4,button);U minutes=evolutionMinutes(b);evolutionLabel(b,button,minutes,evolutionPrice(b,minutes));}
+ if(mode==1&&refresh){call<void>(b,0x7e96a4,button);setInstantGemLabel(b,button,evolutionPrice(b,evolutionMinutes(b)));}
 }
 extern "C" U offlineEvolutionClick(U b,P ui,U button){
  if(!regular(b)||(button!=0x1e8d&&button!=0x1938))return 0;

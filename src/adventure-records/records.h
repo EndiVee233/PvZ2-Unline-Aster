@@ -66,14 +66,20 @@ struct LevelInfo {
 
 inline const LevelInfo* findLevel(const char* alias) {
     if (!alias) return nullptr;
+    const auto mapCharacter = [alias](const char* ch) {
+        const auto digit = [](char value) { return value >= '0' && value <= '9'; };
+        // Numbered branches may also be identified by the resource filename.
+        return *ch == '-' && ch != alias && digit(ch[-1]) && digit(ch[1]) ? '_' : *ch;
+    };
     unsigned lo = 0, hi = sizeof(levels) / sizeof(levels[0]);
     while (lo < hi) {
         const unsigned mid = lo + (hi - lo) / 2;
         const auto* lhs = alias;
         const auto* rhs = levels[mid].alias;
-        while (*lhs && *lhs == *rhs) { ++lhs; ++rhs; }
-        if (*lhs == *rhs) return &levels[mid];
-        if (*lhs < *rhs) hi = mid;
+        while (*lhs && mapCharacter(lhs) == *rhs) { ++lhs; ++rhs; }
+        const char actual = mapCharacter(lhs);
+        if (actual == *rhs) return &levels[mid];
+        if (actual < *rhs) hi = mid;
         else lo = mid + 1;
     }
     return nullptr;

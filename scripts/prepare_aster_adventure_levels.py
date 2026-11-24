@@ -6,6 +6,7 @@ import re
 from zipfile import ZipFile
 
 from build_aster_legacy_endless_gameplay import level_document, package_data
+from build_aster_rgba_background_pilot import ASSET
 from index_texture_prefetch import ResourceZip
 from merge_legacy_pvp_resources import Bundle
 
@@ -57,29 +58,37 @@ MAIN_GOAL = "击败所有僵尸，完成主线关卡"
 def read_documents(apk):
     documents = {}
     strings = {}
+
+    def read_bundle(raw_bundle):
+        bundle = Bundle(raw_bundle)
+        for index, payload in enumerate(bundle.payloads):
+            entries = [(name, offset, size) for name, (kind, offset, size, *_) in bundle.files(index)
+                       if kind == 0 and (name in (MODULES, STRINGS) or name.startswith((MAPS, LEVELS)))]
+            if not entries:
+                continue
+            data = package_data(payload)
+            for name, offset, size in entries:
+                raw = data[offset:offset + size]
+                if name == STRINGS:
+                    try:
+                        source = raw.decode("utf-8-sig")
+                    except UnicodeDecodeError:
+                        source = raw.decode("gb18030", errors="replace")
+                    strings.update((f"[{key}]", " ".join(value.split())) for key, value in
+                                   re.findall(r"^\[([^\r\n\]]+)\]\s*\n(.*?)(?=^\[|\Z)", source, re.M | re.S))
+                elif name.endswith(".RTON"):
+                    documents[name] = level_document(raw, name)
+
+    world_bundles = {f"{world}.rsb.smf" for world in (*WORLDS, "init", "dynamic")}
     with ZipFile(ResourceZip(apk)) as archive:
         for member in archive.namelist():
-            name = Path(member).name
-            if name not in {f"{world}.rsb.smf" for world in (*WORLDS, "init", "dynamic")}:
-                continue
-            bundle = Bundle(archive.read(member))
-            for index, payload in enumerate(bundle.payloads):
-                entries = [(name, offset, size) for name, (kind, offset, size, *_) in bundle.files(index)
-                           if kind == 0 and (name in (MODULES, STRINGS) or name.startswith((MAPS, LEVELS)))]
-                if not entries:
-                    continue
-                data = package_data(payload)
-                for name, offset, size in entries:
-                    raw = data[offset:offset + size]
-                    if name == STRINGS:
-                        try:
-                            source = raw.decode("utf-8-sig")
-                        except UnicodeDecodeError:
-                            source = raw.decode("gb18030", errors="replace")
-                        strings.update((f"[{key}]", " ".join(value.split())) for key, value in
-                                       re.findall(r"^\[([^\r\n\]]+)\]\s*\n(.*?)(?=^\[|\Z)", source, re.M | re.S))
-                    elif name.endswith(".RTON"):
-                        documents[name] = level_document(raw, name)
+            if Path(member).name in world_bundles:
+                read_bundle(archive.read(member))
+    # BootActivity installs this dynamic bundle over the resource ZIP. It also
+    # supplies levels that have no counterpart in the initial resource bundle.
+    with ZipFile(apk) as archive:
+        if ASSET in archive.namelist():
+            read_bundle(archive.read(ASSET))
     return documents, strings
 
 
@@ -161,6 +170,17 @@ def conflicting_star_masks(tiers):
     return conflicts
 
 
+def level_document_for_alias(documents, alias):
+    stem = alias.upper()
+    exact = documents.get(f"{LEVELS}{stem}.RTON")
+    if exact is not None:
+        return exact
+    # The native map can use an underscore within a numbered branch alias,
+    # while its resource file uses a hyphen in the same position.
+    filename = re.sub(r"(?<=\d)_(?=\d)", "-", stem)
+    return documents.get(f"{LEVELS}{filename}.RTON")
+
+
 def collect_levels(documents, strings):
     shared = keyed(documents[MODULES]["objects"])
     catalog = {}
@@ -173,7 +193,7 @@ def collect_levels(documents, strings):
             if event["m_eventType"] != "level":
                 continue
             alias = event["m_dataString"].lower()
-            resource = documents.get(f"{LEVELS}{alias.upper()}.RTON")
+            resource = level_document_for_alias(documents, alias)
             if not resource or alias in catalog:
                 continue
             objects = resource["objects"]

@@ -60,7 +60,7 @@ static void giftLedgerPath(char* out, Word player, bool temporary) {
     while ((*out++ = *suffix++)) {}
 }
 
-static Word giftCalendarDay(Word base) {
+static Word socialCalendarDay(Word base) {
     Word time[2];
     if (native<int>(base, 0x147974, time, nullptr) != 0 || time[0] < 86400 || time[0] > 0x7fffffff) {
         return 0;
@@ -78,7 +78,7 @@ static bool giftClaimed(const GiftLedger& ledger, Word id) {
 }
 
 static bool loadGifts(Word base, Word player, GiftLedger& ledger) {
-    const Word day = giftCalendarDay(base);
+    const Word day = socialCalendarDay(base);
     if (!day) return false;
     char path[96];
     giftLedgerPath(path, player, false);

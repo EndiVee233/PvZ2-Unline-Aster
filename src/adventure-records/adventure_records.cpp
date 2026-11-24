@@ -33,7 +33,7 @@ struct Run {
     AdventureRecords::Card borrowedCard;
     WeakRef borrowedDrop;
     Object borrowedCursor;
-    float borrowedDropTime;
+    Word borrowedFrom;
 #endif
 #ifdef ASTER_WSA_BATTLE_TOOLS
     float commandPollAt;
@@ -228,7 +228,7 @@ extern "C" void asterAdventureTick(Word base, Object board) {
     current.clock.advance(time, field<float>(clock, 0x28), live);
 #ifdef ASTER_SOCIAL_LEVELS
     if (live && current.borrowedCard.level && !current.borrowedDrop.id && !current.borrowedDrop.serial &&
-        current.clock.elapsed >= current.borrowedDropTime) dropBorrowedCard(base, board);
+        current.clock.elapsed >= 35.0f) dropBorrowedCard(base, board);
 #endif
 #ifdef ASTER_WSA_BATTLE_TOOLS
     if (live && !field<unsigned char>(board, 0x7fe)) checkBattleTools(base, time);

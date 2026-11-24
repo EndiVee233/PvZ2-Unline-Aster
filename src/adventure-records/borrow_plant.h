@@ -61,6 +61,47 @@ static const char32_t* borrowHeading;
 static const char32_t* borrowEmpty;
 static const char32_t* borrowLoading;
 
+enum class BorrowStatus { Available, Used, Unavailable };
+
+static void borrowUsagePath(char* out, Word player, Word friendId, const char* alias, bool temporary) {
+    for (char ch : "/data/data/com.pvz2unline.aster/files/userdata/borrow-plant-") {
+        if (ch) *out++ = ch;
+    }
+    constexpr char hex[] = "0123456789abcdef";
+    const Word ids[] = {player, friendId};
+    for (Word id : ids) {
+        for (int bit = 28; bit >= 0; bit -= 4) *out++ = hex[(id >> bit) & 15];
+        *out++ = '-';
+    }
+    while (*alias) *out++ = *alias++;
+    const char* suffix = temporary ? ".bin.tmp" : ".bin";
+    while ((*out++ = *suffix++)) {}
+}
+
+static BorrowStatus borrowStatus(Word base, Word day, const char* path, Word& previous) {
+    previous = 0;
+    if (!day) return BorrowStatus::Unavailable;
+    int fd = native<int>(base, 0x148448, path, 0, 0);
+    if (fd < 0) {
+        constexpr int noSuchFile = 2;
+        return *native<const int*>(base, 0x147cbc) == noSuchFile
+            ? BorrowStatus::Available : BorrowStatus::Unavailable;
+    }
+    char extra;
+    const bool valid = readExact(base, fd, &previous, sizeof(previous)) &&
+        native<int>(base, 0x148460, fd, &extra, 1) == 0 && previous && previous <= day;
+    native<int>(base, 0x147b90, fd);
+    if (!valid) return BorrowStatus::Unavailable;
+    return previous == day ? BorrowStatus::Used : BorrowStatus::Available;
+}
+
+static BorrowStatus offerStatus(Word base, Word day, const BorrowOffer& offer) {
+    char path[128];
+    borrowUsagePath(path, borrow.request.owner, offer.id, offer.card.type, false);
+    Word previous;
+    return borrowStatus(base, day, path, previous);
+}
+
 static void queueBorrowAction(Word action) {
     if (!borrow.hiding && !borrow.action) borrow.action = action;
 }
@@ -357,17 +398,24 @@ static void refreshBorrowOffers(Word base) {
     borrowDialogButton(base, U"", borrowClose, {598, 12, 51, 48},
                        borrow.art + BorrowClose, borrow.art + BorrowCloseDown);
     const Word first = borrow.page * borrowPageSize;
+    const Word today = socialCalendarDay(base);
     for (Word i = 0; i < borrowPageSize && first + i < borrow.count; ++i) {
         const auto& offer = borrow.offers[first + i];
+        const auto status = offerStatus(base, today, offer);
         auto& row = borrow.rows[borrow.rowCount++];
-        row.button = borrowDialogButton(base, U"", borrowPick + first + i, borrowRowBounds(i));
+        row.button = status == BorrowStatus::Available
+            ? borrowDialogButton(base, U"", borrowPick + first + i, borrowRowBounds(i)) : nullptr;
         loadBorrowPacketArt(base, row, offer.card.type);
         char32_t label[40];
         auto* end = append(label, offer.friendName, 10);
         if (offer.friendName[10]) append(end, U"…");
         makeText(base, row.name, label);
-        borrowPlantName(base, label, offer.card.type);
-        makeText(base, row.details, label);
+        if (status == BorrowStatus::Available) {
+            borrowPlantName(base, label, offer.card.type);
+            makeText(base, row.details, label);
+        } else {
+            makeText(base, row.details, status == BorrowStatus::Used ? U"今日已借用" : U"暂不可借用");
+        }
         if (const auto plant = borrowPlantType(base, offer.card.type)) {
             // The seed packet reads the plant's normal price through this method.
             const auto price = field<Word>(field<Object>(plant, 0), 0x2c);
@@ -489,10 +537,12 @@ static void drawBorrowDialogContents(Word base, Object dialog, Object graphics) 
         }
         drawText(row.name, {box.x + 77, box.y + 1, 132, 34}, white);
         drawText(row.details, {box.x + 77, box.y + 40, 132, 29}, ink);
-        if (selected || pressed) {
+        if (!row.button || selected || pressed) {
             fill({box.x + 4, box.y + 5, box.width - 8, box.height - 10}, {19, 26, 13, 98});
-            native<void>(base, 0x1166e74, graphics, false);
-            draw(borrow.art[BorrowBorder].image, {box.x - 5, box.y - 4, box.width + 10, box.height + 8});
+            if (row.button) {
+                native<void>(base, 0x1166e74, graphics, false);
+                draw(borrow.art[BorrowBorder].image, {box.x - 5, box.y - 4, box.width + 10, box.height + 8});
+            }
         }
     }
     body = previousBody;
@@ -710,8 +760,13 @@ static void updateBorrowChooser(Word base) {
         }
     } else if (borrow.dialog && action) {
         if (action >= borrowPick && action - borrowPick < borrow.count) {
-            borrow.selected = action - borrowPick + 1;
-            closeBorrowDialog(base);
+            const Word index = action - borrowPick;
+            if (offerStatus(base, socialCalendarDay(base), borrow.offers[index]) == BorrowStatus::Available) {
+                borrow.selected = index + 1;
+                closeBorrowDialog(base);
+            } else {
+                refreshBorrowOffers(base);
+            }
         } else if (action == borrowClear || action == borrowClose) {
             if (action == borrowClear) borrow.selected = 0;
             closeBorrowDialog(base);
@@ -750,10 +805,11 @@ extern "C" void asterBorrowDrawOverChooser(Word base, Object chooser, Object gra
 static void bindBorrowedCard(Object board) {
     if (board != borrow.board || borrow.request.owner != current.owner || !borrow.selected ||
         borrow.request.day != current.day || borrow.selected > borrow.count) return;
-    const auto& card = borrow.offers[borrow.selected - 1].card;
+    const auto& offer = borrow.offers[borrow.selected - 1];
+    const auto& card = offer.card;
     for (Word i = 0; i < 32; ++i) current.borrowedCard.type[i] = card.type[i];
     current.borrowedCard.level = card.level;
-    current.borrowedDropTime = 35.0f;
+    current.borrowedFrom = offer.id;
     borrow.selected = 0;
 }
 
@@ -815,13 +871,30 @@ extern "C" bool asterAdventureBindBorrowCursor(Word base, Object board, Object c
 extern "C" Object asterAdventurePlaceBorrowed(Word base, Object cursor, Word column, Word row, int grade) {
     const bool borrowed = sameRun(base, gameBoard(base)) && current.borrowedCursor == cursor &&
         current.borrowedCard.level;
+    if (!borrowed) return native<Object>(base, 0x4e719c, cursor, column, row, grade);
+
+    // The cursor's event dispatcher must not notify plant listeners on a denied loan.
+    const auto rejected = reinterpret_cast<Object>(~0U);
+    const Word today = socialCalendarDay(base);
+    char path[128], temp[128];
+    const auto& card = current.borrowedCard;
+    borrowUsagePath(path, current.owner, current.borrowedFrom, card.type, false);
+    Word previous;
+    if (borrowStatus(base, today, path, previous) != BorrowStatus::Available) return rejected;
+    borrowUsagePath(temp, current.owner, current.borrowedFrom, card.type, true);
+    if (!writeBytes(base, &today, sizeof(today), path, temp)) return rejected;
+
     Object plant = native<Object>(base, 0x4e719c, cursor, column, row,
-                                  borrowed ? int(current.borrowedCard.level) : grade);
-    if (borrowed && plant) {
-        native<int>(base, 0x147adc, 4, "AsterAdventure", "borrow-placed type=%s requested=%u actual=%u",
-                    current.borrowedCard.type, current.borrowedCard.level, field<Word>(plant, 0x38));
-        current.borrowedCursor = nullptr;
-        current.borrowedCard.level = 0;
+                                  int(card.level));
+    if (!plant) {
+        // The native placement rejected the tile. Restore the earlier usage.
+        if (previous) writeBytes(base, &previous, sizeof(previous), path, temp);
+        else native<int>(base, 0x148424, path);
+        return rejected;
     }
+    native<int>(base, 0x147adc, 4, "AsterAdventure", "borrow-placed type=%s requested=%u actual=%u",
+                card.type, card.level, field<Word>(plant, 0x38));
+    current.borrowedCursor = nullptr;
+    current.borrowedCard.level = 0;
     return plant;
 }

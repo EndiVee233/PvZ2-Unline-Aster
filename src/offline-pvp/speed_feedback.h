@@ -5,7 +5,9 @@ extern "C" U offlineSpeedFeedbackRate(U b){
  P board=app?at<P>(app,0x6bc):nullptr;
  if(!board||at<U>(board,0xc0)!=5||at<unsigned char>(board,0x8d5))return 0;
  P controller=at<P>(reinterpret_cast<P>(b),0x1830528);
- return controller?at<U>(controller,0x30):0;
+ U rate=controller?at<U>(controller,0x30):0;
+ // Both fast-forward rates use cue 2 in the Android bridge.
+ return rate==0x40400000?0x40000000:rate;
 }
 
 extern "C" void offlineSpeedFeedbackChanged(U b,U before){

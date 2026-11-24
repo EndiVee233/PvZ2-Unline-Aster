@@ -1,0 +1,253 @@
+{
+  "format": "pvz2-offline-pvp",
+  "version": 2,
+  "名字": "五香蛋大爹无敌",
+  "奖杯": null,
+  "特殊值": false,
+  "出现概率": null,
+  "columns": 9,
+  "rows": 5,
+  "tierMask": 1,
+  "阵容": [
+    {
+      "type": "wintermelon",
+      "row": 0,
+      "column": 0,
+      "level": 1
+    },
+    {
+      "type": "wintermelon",
+      "row": 1,
+      "column": 0,
+      "level": 1
+    },
+    {
+      "type": "wintermelon",
+      "row": 2,
+      "column": 0,
+      "level": 1
+    },
+    {
+      "type": "wintermelon",
+      "row": 3,
+      "column": 0,
+      "level": 1
+    },
+    {
+      "type": "wintermelon",
+      "row": 4,
+      "column": 0,
+      "level": 1
+    },
+    {
+      "type": "wintermelon",
+      "row": 0,
+      "column": 1,
+      "level": 1
+    },
+    {
+      "type": "wintermelon",
+      "row": 1,
+      "column": 1,
+      "level": 1
+    },
+    {
+      "type": "wintermelon",
+      "row": 2,
+      "column": 1,
+      "level": 1
+    },
+    {
+      "type": "wintermelon",
+      "row": 3,
+      "column": 1,
+      "level": 1
+    },
+    {
+      "type": "wintermelon",
+      "row": 4,
+      "column": 1,
+      "level": 1
+    },
+    {
+      "type": "kiwifruit",
+      "row": 0,
+      "column": 2,
+      "level": 1
+    },
+    {
+      "type": "kiwifruit",
+      "row": 1,
+      "column": 2,
+      "level": 1
+    },
+    {
+      "type": "kiwifruit",
+      "row": 2,
+      "column": 2,
+      "level": 1
+    },
+    {
+      "type": "kiwifruit",
+      "row": 3,
+      "column": 2,
+      "level": 1
+    },
+    {
+      "type": "kiwifruit",
+      "row": 4,
+      "column": 2,
+      "level": 1
+    },
+    {
+      "type": "pumpkinwitch",
+      "row": 0,
+      "column": 3,
+      "level": 1
+    },
+    {
+      "type": "magicshroom",
+      "row": 1,
+      "column": 3,
+      "level": 1
+    },
+    {
+      "type": "pumpkinwitch",
+      "row": 2,
+      "column": 3,
+      "level": 1
+    },
+    {
+      "type": "magicshroom",
+      "row": 3,
+      "column": 3,
+      "level": 1
+    },
+    {
+      "type": "pumpkinwitch",
+      "row": 4,
+      "column": 3,
+      "level": 1
+    },
+    {
+      "type": "horsebean",
+      "row": 0,
+      "column": 4,
+      "level": 1
+    },
+    {
+      "type": "horsebean",
+      "row": 1,
+      "column": 4,
+      "level": 1
+    },
+    {
+      "type": "horsebean",
+      "row": 2,
+      "column": 4,
+      "level": 1
+    },
+    {
+      "type": "horsebean",
+      "row": 3,
+      "column": 4,
+      "level": 1
+    },
+    {
+      "type": "horsebean",
+      "row": 4,
+      "column": 4,
+      "level": 1
+    },
+    {
+      "type": "chardguard",
+      "row": 0,
+      "column": 5,
+      "level": 1
+    },
+    {
+      "type": "chardguard",
+      "row": 1,
+      "column": 5,
+      "level": 1
+    },
+    {
+      "type": "chardguard",
+      "row": 2,
+      "column": 5,
+      "level": 1
+    },
+    {
+      "type": "chardguard",
+      "row": 3,
+      "column": 5,
+      "level": 1
+    },
+    {
+      "type": "chardguard",
+      "row": 4,
+      "column": 5,
+      "level": 1
+    },
+    {
+      "type": "stallia",
+      "row": 0,
+      "column": 7,
+      "level": 1
+    },
+    {
+      "type": "stallia",
+      "row": 1,
+      "column": 7,
+      "level": 1
+    },
+    {
+      "type": "stallia",
+      "row": 2,
+      "column": 7,
+      "level": 1
+    },
+    {
+      "type": "stallia",
+      "row": 3,
+      "column": 7,
+      "level": 1
+    },
+    {
+      "type": "stallia",
+      "row": 4,
+      "column": 7,
+      "level": 1
+    },
+    {
+      "type": "stallia",
+      "row": 0,
+      "column": 8,
+      "level": 1
+    },
+    {
+      "type": "stallia",
+      "row": 1,
+      "column": 8,
+      "level": 1
+    },
+    {
+      "type": "stallia",
+      "row": 2,
+      "column": 8,
+      "level": 1
+    },
+    {
+      "type": "stallia",
+      "row": 3,
+      "column": 8,
+      "level": 1
+    },
+    {
+      "type": "stallia",
+      "row": 4,
+      "column": 8,
+      "level": 1
+    }
+  ]
+}

@@ -1,0 +1,205 @@
+{
+  "format": "pvz2-offline-pvp",
+  "version": 2,
+  "名字": "",
+  "奖杯": null,
+  "特殊值": false,
+  "出现概率": null,
+  "columns": 9,
+  "rows": 5,
+  "tierMask": 8,
+  "阵容": [
+    {
+      "type": "electricblueberry",
+      "row": 0,
+      "column": 0,
+      "level": 4
+    },
+    {
+      "type": "kiwifruit",
+      "row": 1,
+      "column": 0,
+      "level": 4
+    },
+    {
+      "type": "kiwifruit",
+      "row": 2,
+      "column": 0,
+      "level": 4
+    },
+    {
+      "type": "electricblueberry",
+      "row": 3,
+      "column": 0,
+      "level": 4
+    },
+    {
+      "type": "kiwifruit",
+      "row": 4,
+      "column": 0,
+      "level": 4
+    },
+    {
+      "type": "kiwifruit",
+      "row": 0,
+      "column": 1,
+      "level": 4
+    },
+    {
+      "type": "tallnut",
+      "row": 1,
+      "column": 1,
+      "level": 4
+    },
+    {
+      "type": "tallnut",
+      "row": 2,
+      "column": 1,
+      "level": 4
+    },
+    {
+      "type": "kiwifruit",
+      "row": 3,
+      "column": 1,
+      "level": 4
+    },
+    {
+      "type": "tallnut",
+      "row": 4,
+      "column": 1,
+      "level": 4
+    },
+    {
+      "type": "tallnut",
+      "row": 0,
+      "column": 2,
+      "level": 4
+    },
+    {
+      "type": "electricblueberry",
+      "row": 1,
+      "column": 2,
+      "level": 4
+    },
+    {
+      "type": "electricblueberry",
+      "row": 2,
+      "column": 2,
+      "level": 4
+    },
+    {
+      "type": "kiwifruit",
+      "row": 3,
+      "column": 2,
+      "level": 4
+    },
+    {
+      "type": "coconutcannon",
+      "row": 4,
+      "column": 2,
+      "level": 4
+    },
+    {
+      "type": "coconutcannon",
+      "row": 1,
+      "column": 3,
+      "level": 4
+    },
+    {
+      "type": "tallnut",
+      "row": 3,
+      "column": 3,
+      "level": 4
+    },
+    {
+      "type": "electricblueberry",
+      "row": 4,
+      "column": 3,
+      "level": 4
+    },
+    {
+      "type": "electricblueberry",
+      "row": 0,
+      "column": 4,
+      "level": 4
+    },
+    {
+      "type": "holonut",
+      "row": 1,
+      "column": 4,
+      "level": 4
+    },
+    {
+      "type": "holonut",
+      "row": 2,
+      "column": 4,
+      "level": 4
+    },
+    {
+      "type": "sweetpotato",
+      "row": 3,
+      "column": 4,
+      "level": 4
+    },
+    {
+      "type": "holonut",
+      "row": 0,
+      "column": 5,
+      "level": 4
+    },
+    {
+      "type": "horsebean",
+      "row": 1,
+      "column": 5,
+      "level": 4
+    },
+    {
+      "type": "chestnut",
+      "row": 4,
+      "column": 6,
+      "level": 4
+    },
+    {
+      "type": "chestnut",
+      "row": 0,
+      "column": 7,
+      "level": 4
+    },
+    {
+      "type": "kiwifruit",
+      "row": 2,
+      "column": 7,
+      "level": 4
+    },
+    {
+      "type": "kiwifruit",
+      "row": 3,
+      "column": 7,
+      "level": 4
+    },
+    {
+      "type": "sweetpotato",
+      "row": 4,
+      "column": 7,
+      "level": 4
+    },
+    {
+      "type": "sweetpotato",
+      "row": 0,
+      "column": 8,
+      "level": 4
+    },
+    {
+      "type": "holonut",
+      "row": 2,
+      "column": 8,
+      "level": 4
+    },
+    {
+      "type": "holonut",
+      "row": 3,
+      "column": 8,
+      "level": 4
+    }
+  ]
+}

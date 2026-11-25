@@ -43,7 +43,8 @@ import javax.net.ssl.HttpsURLConnection;
 
 final class AdventureFriendFiles {
     static final String EXPORT_EVENT = "aster-social-export";
-    static final int EXPORT_SIZE = 280;
+    private static final int LEGACY_EXPORT_SIZE = 280;
+    static final int EXPORT_SIZE = LEGACY_EXPORT_SIZE + Integer.BYTES;
     static final int MAX_FRIENDS = 40;
     private static final int SAVE_DOCUMENT = 20804;
     private static final int MAX_EXPORT_BYTES = 12 * 1024 * 1024;
@@ -131,7 +132,7 @@ final class AdventureFriendFiles {
         EXPORTS.execute(() -> {
             try {
                 ByteBuffer header = ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN);
-                if (raw.length != EXPORT_SIZE || header.getInt() != 1) throw new IOException("Invalid export request");
+                if (!validExportSize(raw.length) || header.getInt() != 1) throw new IOException("Invalid export request");
                 int owner = header.getInt();
                 if (owner == -1) throw new IOException("Player not selected");
                 String id = exportIdentity(activity, owner);
@@ -156,10 +157,14 @@ final class AdventureFriendFiles {
         });
     }
 
+    private static boolean validExportSize(int size) {
+        return size == EXPORT_SIZE || size == LEGACY_EXPORT_SIZE;
+    }
+
     private static Export createExport(byte[] raw, String id, JSONObject levels, File records)
             throws IOException, JSONException {
         ByteBuffer header = ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN);
-        if (raw.length != EXPORT_SIZE || header.getInt() != 1 || !id.matches(UUID_PATTERN)) {
+        if (!validExportSize(raw.length) || header.getInt() != 1 || !id.matches(UUID_PATTERN)) {
             throw new IOException("Invalid profile export");
         }
         int owner = header.getInt();
@@ -209,9 +214,10 @@ final class AdventureFriendFiles {
             if (record.stars > stars || (stars == 1 && record.stars != 1)) continue;
             runs.put(encodeRecord(record, alias, info.getBoolean(2)));
         }
+        int totalStars = raw.length == EXPORT_SIZE ? Math.max(0, header.getInt(LEGACY_EXPORT_SIZE)) : 0;
         JSONObject result = new JSONObject().put("format", FORMAT).put("version", 1)
                 .put("playerId", id).put("name", name).put("avatar", avatar % AdventureSocial.LEGACY_AVATAR_COUNT)
-                .put("borrowPlants", loans).put("runs", runs);
+                .put("totalStars", totalStars).put("borrowPlants", loans).put("runs", runs);
         // Clients with the original six portraits can still read the player file.
         if (avatar >= AdventureSocial.LEGACY_AVATAR_COUNT) result.put("avatarIndex", avatar);
         byte[] encoded = (result.toString() + "\n").getBytes(StandardCharsets.UTF_8);
@@ -411,7 +417,7 @@ final class AdventureFriendFiles {
             if (legacyId != null && included.contains(legacyId)) continue;
             if (size + bytes + 128 > MAX_CATALOG_BYTES) continue;
             JSONObject player = old.get(sha);
-            if (player == null) {
+            if (player == null || !player.has("totalStars")) {
                 byte[] data = fetch(RAW + Uri.encode(name), MAX_EXPORT_BYTES);
                 if (data.length != bytes || !sha.equals(blobSha(data))) throw new IOException("GitHub file changed during sync");
                 try {
@@ -427,6 +433,15 @@ final class AdventureFriendFiles {
             updated.put(player);
         }
         return updated;
+    }
+
+    static int totalStars(JSONObject player) {
+        if (!player.has("totalStars")) return 0;
+        try {
+            return AdventureSocial.integer(player, "totalStars", 0, Integer.MAX_VALUE);
+        } catch (IOException | JSONException invalid) {
+            return 0;
+        }
     }
 
     static JSONObject parsePlayer(byte[] raw, String legacyId, JSONObject levels) throws IOException, JSONException {
@@ -476,7 +491,7 @@ final class AdventureFriendFiles {
             runs.put(encodeRecord(validated, alias, formation));
         }
         JSONObject result = new JSONObject().put("id", friend).put("playerId", id).put("name", name).put("avatar", avatar)
-                .put("borrowPlants", loans).put("runs", runs);
+                .put("totalStars", totalStars(player)).put("borrowPlants", loans).put("runs", runs);
         if (player.has("avatarIndex")) {
             int index = AdventureSocial.integer(player, "avatarIndex",
                     AdventureSocial.LEGACY_AVATAR_COUNT, AdventureSocial.AVATAR_COUNT - 1);

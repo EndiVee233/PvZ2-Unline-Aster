@@ -445,6 +445,7 @@ extern "C" bool asterAdventureBest(Word base, Word day, Word stars, Record* out)
 #ifdef ASTER_SOCIAL_LEVELS
 namespace { static void updateAdventureClockHud(Word base); }
 #include "social_levels.h"
+#include "challenge_hud.h"
 #endif
 
 #include "arena_clock.h"

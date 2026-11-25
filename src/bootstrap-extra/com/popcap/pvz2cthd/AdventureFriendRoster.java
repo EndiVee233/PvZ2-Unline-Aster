@@ -20,6 +20,7 @@ final class AdventureFriendRoster {
     private static final int LIST = 9, CATALOG = 10, ADD = 11, REMOVE = 12;
     private static final int OK = 0, FULL = 1, UNAVAILABLE = 2, SAVE_ERROR = 3;
     private static final int ROW_SIZE = 168;
+    private static final int NAME_CODE_POINTS = 39;
 
     private AdventureFriendRoster() {}
 
@@ -106,9 +107,9 @@ final class AdventureFriendRoster {
         for (int i = first; i < first + count; i++) {
             JSONObject player = summary(rows.get(i));
             data.putInt(player.getInt("id")).putInt(player.optInt("avatarIndex", player.getInt("avatar")));
-            int end = data.position() + 160;
-            player.getString("name").codePoints().limit(39).forEach(data::putInt);
-            data.position(end);
+            int end = data.position() + NAME_CODE_POINTS * Integer.BYTES;
+            player.getString("name").codePoints().limit(NAME_CODE_POINTS - 1).forEach(data::putInt);
+            data.position(end).putInt(player.getInt("totalStars"));
         }
         return data.array();
     }
@@ -117,7 +118,8 @@ final class AdventureFriendRoster {
         int avatar = player.optInt("avatar", -1);
         JSONObject result = new JSONObject().put("id", player.getInt("id"))
                 .put("name", PvpPresetDocument.validName(player.getString("name")))
-                .put("avatar", avatar >= 0 && avatar < AdventureSocial.LEGACY_AVATAR_COUNT ? avatar : -1);
+                .put("avatar", avatar >= 0 && avatar < AdventureSocial.LEGACY_AVATAR_COUNT ? avatar : -1)
+                .put("totalStars", AdventureFriendFiles.totalStars(player));
         int index = player.optInt("avatarIndex", -1);
         if (index >= AdventureSocial.LEGACY_AVATAR_COUNT && index < AdventureSocial.AVATAR_COUNT)
             result.put("avatarIndex", index);

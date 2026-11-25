@@ -56,12 +56,13 @@ struct FriendBook {
     SocialMessage request;
     Word nextPoll, expires, status, rosterCount, total, page, count;
     bool pending;
-    struct Entry { Word id, avatar; char32_t name[40]; } entries[maxRoster];
+    struct Entry { Word id, avatar; char32_t name[39]; Word totalStars; } entries[maxRoster];
     enum Art { Tab, Selected, Topper, Row, Avatar, Close, Leaves, ArtCount };
     ButtonSkin art[ArtCount];
     const char32_t* captions[2];
 };
 static FriendBook friendBook;
+static_assert(sizeof(FriendBook::Entry) == 168);
 constexpr int friendTabWidth = 140;
 constexpr int friendTabBodyHeight = borrowTop;
 constexpr int tabSpriteWidth = 672;
@@ -154,8 +155,9 @@ static bool exportUser(Word base, Object profile) {
         Word version, owner, avatar;
         char32_t name[40];
         AdventureRecords::Card loans[userSlots];
+        Word totalStars;
     };
-    static_assert(sizeof(Export) == 280);
+    static_assert(sizeof(Export) == 284);
     Export data;
     auto* bytes = reinterpret_cast<volatile unsigned char*>(&data);
     for (Word i = 0; i < sizeof(data); ++i) bytes[i] = 0;
@@ -164,6 +166,19 @@ static bool exportUser(Word base, Object profile) {
     data.avatar = user.data.avatar;
     const auto name = field<const char32_t*>(profile, 0x58);
     append(data.name, name && *name ? name : U"玩家", 39);
+    // Read the same profile star counts as the world map HUD.
+    static constexpr char worlds[][9] = {
+        "egypt", "pirate", "cowboy", "kongfu", "future",
+        "dark", "beach", "iceage", "skycity", "lostcity"
+    };
+    char allocator = 0;
+    for (const auto& world : worlds) {
+        const char* alias = nullptr;
+        native<void>(base, 0x14ed0e1, &alias, world, &allocator);
+        const int stars = native<int>(base, 0x709298, profile, &alias, 0U);
+        releaseString(base, alias);
+        if (stars > 0) data.totalStars += Word(stars);
+    }
     findUserPlants(base, profile);
     for (Word slot = 0; slot < userSlots; ++slot) {
         for (Word i = 0; i < user.availableCount; ++i) {
@@ -290,7 +305,8 @@ static bool pollFriendBook(Word base) {
             if (valid) {
                 for (Word i = 0; i < header[4]; ++i) {
                     const auto& row = friendBook.entries[i];
-                    if (!row.id || !validFriendAvatar(row.avatar) || !row.name[0] || row.name[39])
+                    if (!row.id || !validFriendAvatar(row.avatar) || !row.name[0] || row.name[38] ||
+                        row.totalStars > 0x7fffffff)
                         valid = false;
                 }
             }
@@ -314,6 +330,9 @@ static bool pollFriendBook(Word base) {
 static void buildFriendBook(Word base) {
     const bool add = user.page == UserPage::AddFriend;
     const auto& art = friendBook.art;
+    ButtonSkin star;
+    star.image = nullptr;
+    if (!add && friendBook.count) resolveMenuSkin(base, star, "IMAGE_UI_HUD_WORLDMAP_STAR", 2U);
     userImage(art[FriendBook::Close].image, {598, 12, 51, 48});
     userButton(base, U"", UserFriendList, {friendTabX(0), 0, friendTabWidth, friendTabBodyHeight});
     userButton(base, U"", UserFriendAdd, {friendTabX(1), 0, friendTabWidth, friendTabBodyHeight});
@@ -330,6 +349,19 @@ static void buildFriendBook(Word base) {
         auto* end = append(name, row.name, 10);
         if (row.name[10]) append(end, U"…");
         userLabel(base, name, {box.x + 78, box.y + 2, 214, 35}, userWhite);
+        if (!add) {
+            char32_t stars[12];
+            auto* end = number(stars, row.totalStars);
+            const int digits = int(end - stars);
+            if (star.image) {
+                userImage(star.image, {box.x + 74, box.y + 43, 25, 25});
+                const int width = 8 + digits * 14;
+                userLabel(base, stars, {box.x + 101, box.y + 41, width < 88 ? width : 88, 29}, rowInk);
+            } else {
+                append(end, U"星");
+                userLabel(base, stars, {box.x + 74, box.y + 41, 30 + digits * 8, 29}, rowInk);
+            }
+        }
         const MenuRect action{box.x + 192, box.y + 41, 102, 29};
         if (!add || friendBook.rosterCount < maxRoster) {
             userButton(base, U"", friendRowAction + i, action);

@@ -133,7 +133,7 @@ def fix_zoom_layout(document):
     button["objdata"]["SingleInstance"] = 1
 
 
-def relocate_prefetch(shim, original, rebuilt):
+def relocate_prefetch(shim, original, rebuilt, *, changed_atlases=()):
     """Retarget only the offsets and pool lengths of existing ASTC cache rows."""
     before = iter(original.groups)
     pool_record = struct.Struct("<QQIII")
@@ -153,7 +153,10 @@ def relocate_prefetch(shim, original, rebuilt):
         if not hits:
             continue
         assert new_raw >= old_raw
-        assert texture_section(new_slot)[:old_raw] == texture_section(old_slot)
+        if prior["ID"] in changed_atlases:
+            assert new_raw == old_raw
+        else:
+            assert texture_section(new_slot)[:old_raw] == texture_section(old_slot)
         new_fields = pool_record.pack(len(rebuilt.data), after["fields"][0] + new_gpu,
                                       new_packed, new_raw, new_slot[16] & 1)
         shim = shim.replace(old_fields, new_fields)

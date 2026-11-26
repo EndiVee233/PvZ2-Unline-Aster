@@ -28,9 +28,14 @@ def texture_section(block):
  raw=bytes(block[u32(block,40):u32(block,40)+u32(block,44)])
  return zlib.decompress(raw) if u32(block,16)&1 else raw
 
-def replace_section(bundle,index,files,data,textures=None):
+def replace_section(bundle,index,files,data,textures=None,*,allow_header_growth=False):
  old=bundle.payloads[index];off=u32(old,24);head=bytearray(old[:off]);table=trie_write(files,1);start=u32(head,0x4c)
- assert start+len(table)<=off,'resource table outgrew its reserved header'
+ required=start+len(table)
+ if required>off:
+  assert allow_header_growth and u32(old,20)==off,'resource table outgrew its reserved header'
+  new_offset=(required+4095)&~4095
+  head.extend(bytes(new_offset-off))
+  struct.pack_into('<II',head,20,new_offset,new_offset)
  head[start:start+len(table)]=table;struct.pack_into('<I',head,0x48,len(table))
  textures=texture_section(old) if textures is None else textures
  data+=bytes((-len(data))%4096);textures+=bytes((-len(textures))%4096)

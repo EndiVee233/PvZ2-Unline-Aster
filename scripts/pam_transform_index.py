@@ -23,14 +23,17 @@ class PamIndex:
   start=self.p;name=self.s();reserved=self.s();fps=self.n('i');count=self.n('H');area=self.n('hh');frames=[]
   for i in range(count):
    st=self.p;flags=self.n('B');adds=[];moves=[];label=None
-   rem=[]
+   rem=[];remove_records=[];append_records=[]
    if flags&1:
     for _ in range(self.count()):
+     record=self.p
      idx=self.n('H')&2047
      if idx==2047:idx=self.n('i')
      rem.append(idx)
+     remove_records.append((record,self.p))
    if flags&2:
     for _ in range(self.count()):
+     record=self.p
      num=self.n('H');index=num&2047
      if index==2047:index=self.n('i')
      res=self.n('B')
@@ -39,6 +42,7 @@ class PamIndex:
      aname=self.s() if num&4096 else None
      if num&2048:self.p+=4
      adds.append(dict(index=index,res=res,sprite=bool(num&32768),name=aname))
+     append_records.append((record,self.p))
    if flags&4:
     for _ in range(self.count()):
      ms=self.p;num=self.n('H');idx=num&1023
@@ -51,9 +55,11 @@ class PamIndex:
      color=self.n('4B') if num&8192 else None
      if num&1024:self.p+=2
      moves.append(dict(index=idx,flags=num,mat=mat,pos=pos,start=ms,end=self.p,color=color))
+   events_start=self.p
    if flags&8:label=self.s()
    commands=[]
    if flags&32:
     for _ in range(self.n('B')):commands.append((self.s(),self.s()))
-   frames.append(dict(start=st,end=self.p,label=label,adds=adds,moves=moves,commands=commands,rem=rem))
+   frames.append(dict(start=st,end=self.p,label=label,adds=adds,moves=moves,commands=commands,rem=rem,
+                      remove_records=remove_records,append_records=append_records,events_start=events_start))
   self.sprites.append(dict(name=override or name,start=start,end=self.p,frames=frames))

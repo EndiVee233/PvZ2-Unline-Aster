@@ -34,3 +34,7 @@
 
 本项目由AI编写
 EndiVee233太丢三落四了...总是把签名文件丢掉
+
+## 在线配置
+
+更新公告、PvP 共享阵容和好友资料统一维护在 [online-config/](online-config/)。

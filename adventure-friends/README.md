@@ -1,5 +1,7 @@
 # Aster 社区好友库
 
+新配置请提交到 [online-config/adventure-friends/](../online-config/adventure-friends/)。此目录供旧版客户端读取。
+
 开启「社交版拓展内容」，在地图的「用户」页点「导出玩家数据」。将导出的 `玩家名.json` 提交到本目录。以后更新资料时，替换同一玩家的旧文件，并保留 JSON 内的 `playerId`。从旧文件名迁移时，删除原来的 `player-<公开编号>.json`。
 
 A327 起可以读取以玩家名命名的文件，也兼容旧文件名。A326 及更早的版本需要升级才能同步改名后的文件。

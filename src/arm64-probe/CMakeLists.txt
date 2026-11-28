@@ -60,12 +60,12 @@ if(ASTER_INITIALIZE_COMPANIONS)
     endif()
     target_compile_definitions(Android PRIVATE ASTER_INITIALIZE_COMPANIONS=1)
 endif()
-set(engine_input [=[{"libSrc.so", "guest_libs/libSrc_a32.so", 0x40000000, 0x42000000},]=])
-set(all_inputs "${engine_input}")
+set(bridge_engine_input [=[{"libSrc.so", "guest_libs/libSrc_a32.so", 0x40000000, 0x42000000},]=])
+# The expanded Aster engine exceeds 32 MiB in memory. Reserve up to the
+# next guest library without changing the engine base used by the shims.
+set(all_inputs [=[{"libSrc.so", "guest_libs/libSrc_a32.so", 0x40000000, 0x43000000},]=])
 if(ASTER_INCLUDE_COMPANIONS)
-    set(engine_input [=[{"libSrc.so", "guest_libs/libSrc_a32.so", 0x40000000, 0x42000000},]=])
-    set(all_inputs [=[{"libSrc.so", "guest_libs/libSrc_a32.so", 0x40000000, 0x42000000},
-        {"libczProject.so", "guest_libs/libczProject_a32.so", 0x43000000, 0x43800000},
+    string(APPEND all_inputs "\n" [=[        {"libczProject.so", "guest_libs/libczProject_a32.so", 0x43000000, 0x43800000},
         {"libHookPVZ2.so", "guest_libs/libHookPVZ2_a32.so", 0x44000000, 0x44800000},
         {"libRestart.so", "guest_libs/libRestart_a32.so", 0x45000000, 0x45800000},
         {"libPresetEditor.so", "guest_libs/libPresetEditor_a32.so", 0x46000000, 0x46800000},
@@ -74,12 +74,12 @@ if(ASTER_INCLUDE_COMPANIONS)
         string(APPEND all_inputs "\n        {\"libAsterRsg.so\", \"guest_libs/libAsterRsg_a32.so\", 0x48000000, 0x48800000},")
         target_compile_definitions(Android PRIVATE ASTER_RESIDENT_EXPERIMENT=1)
     endif()
-    string(FIND "${host_source}" "${engine_input}" marker)
-    if(marker EQUAL -1)
-        message(FATAL_ERROR "Unsupported A7 library input layout")
-    endif()
-    string(REPLACE "${engine_input}" "${all_inputs}" host_source "${host_source}")
 endif()
+string(FIND "${host_source}" "${bridge_engine_input}" marker)
+if(marker EQUAL -1)
+    message(FATAL_ERROR "Unsupported A7 library input layout")
+endif()
+string(REPLACE "${bridge_engine_input}" "${all_inputs}" host_source "${host_source}")
 file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/aster_images.inc" CONTENT "${all_inputs}" @ONLY)
 option(ASTER_GAME_RUNTIME "Build the real game's JNI adapter instead of the isolated probe" OFF)
 if(ASTER_GAME_RUNTIME AND ASTER_RUNTIME_DIAGNOSTICS)
